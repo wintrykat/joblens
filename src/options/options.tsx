@@ -13,6 +13,8 @@ import {
   DEFAULT_CLAUDE_MODEL,
   EDUCATION_LEVELS,
   EMPLOYMENT_PRIORITY_OPTIONS,
+  OCCASIONAL_TRAVEL_OPTIONS,
+  PREFLIGHT_MODE_OPTIONS,
   SKIP_CATEGORY_OPTIONS,
 } from '../lib/settingsOptions';
 import type {
@@ -21,6 +23,7 @@ import type {
   Config,
   EmploymentPriority,
   Location,
+  OccasionalTravelAllowance,
   PipelineLoad,
   Preferences,
   RemotePreference,
@@ -453,6 +456,26 @@ function Options(): JSX.Element {
               </p>
             ) : null}
             <label>
+              Hard-gate preflight
+              <select
+                value={cfg.preflightMode || 'auto'}
+                onChange={(e) =>
+                  patch({ preflightMode: e.target.value as 'auto' | 'hybrid' })
+                }
+              >
+                {PREFLIGHT_MODE_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="note">
+              Speedy skip signals before a full Scan. Uses Haiku (no extended thinking) regardless of
+              the Scan model above. Auto checks listings as you open them; Hybrid waits for Quick
+              check to spend Haiku tokens.
+            </p>
+            <label>
               Theme
               <select
                 value={cfg.theme || 'default'}
@@ -582,7 +605,30 @@ function Options(): JSX.Element {
             + location
           </button>
           <label>
-            Remote work-eligible regions (comma separated, e.g. TX, PA)
+            Occasional travel outside my radii
+            <select
+              value={prefs.occasionalTravelAllowance || 'none'}
+              onChange={(e) =>
+                patchPrefs({
+                  occasionalTravelAllowance: e.target.value as OccasionalTravelAllowance,
+                })
+              }
+            >
+              {OCCASIONAL_TRAVEL_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="note">
+            When set, primarily remote / light-hybrid roles that ask for onsite visits up to this
+            often (and no more) get a Soft concern instead of a Hard skip if the site is outside your
+            ZIP radii. None keeps the strict commute hard-skip. Daily or multi-day office weeks still
+            hard-skip.
+          </p>
+          <label>
+            Where you can work from for remote roles (comma separated, e.g. TX, PA)
             <input
               value={cfg.workEligibleRegions.join(', ')}
               onChange={(e) =>
@@ -595,6 +641,10 @@ function Options(): JSX.Element {
               }
             />
           </label>
+          <p className="note">
+            Residency filter for remote jobs only — not commute cities. Nationwide remote with no
+            residency limit stays eligible even when the employer lists an out-of-region HQ.
+          </p>
           <details className="advanced">
             <summary>Advanced</summary>
             <label>

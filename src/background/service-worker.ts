@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getConfig } from '../lib/storage';
+import { getConfig, hasGeoIntent } from '../lib/storage';
 import { callClaude, parseJsonResponse } from '../lib/anthropic';
 import {
   EXTRACTION_SYSTEM,
@@ -8,9 +8,21 @@ import {
   buildAnalysisUser,
   CONFIG_PROPOSE_SYSTEM,
   buildConfigProposeUser,
+  PREFLIGHT_SYSTEM,
+  buildPreflightUser,
+  buildPreflightHardGates,
 } from '../lib/prompts';
 import { applyDeterministicGeo, computeDeterministicGeo } from '../lib/geo';
 import { applyRatingFloors } from '../lib/ratings';
+import {
+  mergePreflightResults,
+  runLocalPreflight,
+  shouldSkipHaiku,
+  truncateForPreflight,
+  sanitizeHaikuResidencySkip,
+  humanizePreflightReasons,
+} from '../lib/preflight';
+import { PREFLIGHT_CLAUDE_MODEL } from '../lib/settingsOptions';
 import {
   parseConfigProposal,
   sanitizeConfigForPropose,
@@ -20,10 +32,13 @@ import {
   ExtractSkillsRequestSchema,
   OpenSidePanelRequestSchema,
   ProposeConfigFromDocsRequestSchema,
+  PreflightJdRequestSchema,
   parseAnalysisPayload,
   parseExtractedSkills,
+  parsePreflightPayload,
   type AnalyzeJdSuccessData,
   type ExtractSkillsSuccessData,
+  type PreflightJdSuccessData,
   type ProposeConfigFromDocsSuccessData,
 } from '../types/messages';
 
@@ -31,6 +46,7 @@ const BackgroundRequestSchema = z.discriminatedUnion('type', [
   ExtractSkillsRequestSchema,
   AnalyzeJdRequestSchema,
   ProposeConfigFromDocsRequestSchema,
+  PreflightJdRequestSchema,
 ]);
 
 void chrome.sidePanel
@@ -78,7 +94,10 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
 async function handle(
   raw: unknown
 ): Promise<
-  ExtractSkillsSuccessData | AnalyzeJdSuccessData | ProposeConfigFromDocsSuccessData
+  | ExtractSkillsSuccessData
+  | AnalyzeJdSuccessData
+  | ProposeConfigFromDocsSuccessData
+  | PreflightJdSuccessData
 > {
   const parsed = BackgroundRequestSchema.safeParse(raw);
   if (!parsed.success) {
@@ -115,6 +134,63 @@ async function handle(
     });
     const proposal = parseConfigProposal(parseJsonResponse(text));
     return proposal;
+  }
+
+  if (msg.type === 'PREFLIGHT_JD') {
+    if (!cfg.apiKey.trim()) {
+      throw new Error('Add an Anthropic API key in Options before preflight.');
+    }
+    if (!hasGeoIntent(cfg)) {
+      throw new Error('Set geography intent in Options (ZIP, region, or remote-only) before preflight.');
+    }
+
+    const local = runLocalPreflight({
+      cfg,
+      pageText: msg.pageText || '',
+      pageTitle: msg.pageTitle || '',
+    });
+
+    const forceHaiku = Boolean(msg.forceHaiku);
+    // Local hard_skip is decisive; hybrid stays local until Quick check forces Haiku.
+    if (local.verdict === 'hard_skip') {
+      return {
+        preflight: { ...local, reasons: humanizePreflightReasons(local.reasons) },
+      };
+    }
+    if (!forceHaiku && cfg.preflightMode === 'hybrid') {
+      return {
+        preflight: { ...local, reasons: humanizePreflightReasons(local.reasons) },
+      };
+    }
+    if (!forceHaiku && shouldSkipHaiku(local, cfg)) {
+      return {
+        preflight: { ...local, reasons: humanizePreflightReasons(local.reasons) },
+      };
+    }
+
+    const truncated = truncateForPreflight(msg.pageText || '');
+    const text = await callClaude({
+      apiKey: cfg.apiKey,
+      model: PREFLIGHT_CLAUDE_MODEL,
+      system: PREFLIGHT_SYSTEM,
+      user: buildPreflightUser({
+        hardGatesJson: JSON.stringify(buildPreflightHardGates(cfg), null, 2),
+        url: msg.url,
+        pageText: truncated,
+        localHintJson: JSON.stringify(local),
+      }),
+      maxTokens: 1024,
+      thinking: 'disabled',
+    });
+    const haiku = parsePreflightPayload(parseJsonResponse(text));
+    const merged = mergePreflightResults(local, haiku);
+    const sanitized = sanitizeHaikuResidencySkip(merged, msg.pageText || '');
+    return {
+      preflight: {
+        ...sanitized,
+        reasons: humanizePreflightReasons(sanitized.reasons),
+      },
+    };
   }
 
   const geoHint = computeDeterministicGeo({

@@ -1,6 +1,11 @@
 import { z } from 'zod';
-import type { Analysis, ExtractedSkill } from './domain';
-import { AnalysisSchema, ExtractedSkillSchema, WorkHistoryEntrySchema } from './domain';
+import type { Analysis, ExtractedSkill, PreflightResult } from './domain';
+import {
+  AnalysisSchema,
+  ExtractedSkillSchema,
+  PreflightResultSchema,
+  WorkHistoryEntrySchema,
+} from './domain';
 
 export const ExtractSkillsRequestSchema = z.object({
   type: z.literal('EXTRACT_SKILLS'),
@@ -40,6 +45,16 @@ export type ProposeConfigFromDocsRequest = z.infer<
   typeof ProposeConfigFromDocsRequestSchema
 >;
 
+export const PreflightJdRequestSchema = z.object({
+  type: z.literal('PREFLIGHT_JD'),
+  url: z.string().min(1),
+  pageText: z.string(),
+  pageTitle: z.string().optional(),
+  /** When true, always call Haiku after local (Quick check). When false, auto may skip Haiku. */
+  forceHaiku: z.boolean().optional(),
+});
+export type PreflightJdRequest = z.infer<typeof PreflightJdRequestSchema>;
+
 export const ExtensionRequestSchema = z.discriminatedUnion('type', [
   ExtractSkillsRequestSchema,
   AnalyzeJdRequestSchema,
@@ -47,11 +62,13 @@ export const ExtensionRequestSchema = z.discriminatedUnion('type', [
   GetPageTextRequestSchema,
   OpenSidePanelRequestSchema,
   ProposeConfigFromDocsRequestSchema,
+  PreflightJdRequestSchema,
 ]);
 export type ExtensionRequest = z.infer<typeof ExtensionRequestSchema>;
 
 export type ExtractSkillsSuccessData = { skills: ExtractedSkill[] };
 export type AnalyzeJdSuccessData = { analysis: Analysis };
+export type PreflightJdSuccessData = { preflight: PreflightResult };
 export type GetPageTextSuccessData = {
   url: string;
   pageText: string;
@@ -133,4 +150,46 @@ export function parseAnalysisPayload(raw: unknown): Analysis {
   const parsed = AnalysisSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
   throw new Error(`Invalid analysis payload: ${parsed.error.message}`);
+}
+
+export function parsePreflightPayload(raw: unknown): PreflightResult {
+  const candidate =
+    raw && typeof raw === 'object' && 'verdict' in raw
+      ? raw
+      : raw && typeof raw === 'object' && 'preflight' in raw
+        ? (raw as { preflight: unknown }).preflight
+        : raw;
+
+  const loose = z
+    .object({
+      verdict: z.enum(['clear', 'soft', 'hard_skip', 'unknown']).default('unknown'),
+      reasons: z.array(z.string()).default([]),
+      workModel: z.string().optional(),
+      workModelHint: z.string().optional(),
+      organization: z.string().optional(),
+      orgHint: z.string().optional(),
+      geoNote: z.string().optional(),
+      flags: z.array(z.string()).default([]),
+      sources: z.array(z.enum(['local', 'haiku'])).optional(),
+    })
+    .safeParse(candidate);
+
+  if (!loose.success) {
+    throw new Error(`Invalid preflight payload: ${loose.error.message}`);
+  }
+
+  const d = loose.data;
+  const parsed = PreflightResultSchema.safeParse({
+    verdict: d.verdict,
+    reasons: d.reasons,
+    sources: d.sources ?? ['haiku'],
+    workModelHint: d.workModelHint || d.workModel,
+    orgHint: d.orgHint || d.organization,
+    geoNote: d.geoNote,
+    flags: d.flags,
+  });
+  if (!parsed.success) {
+    throw new Error(`Invalid preflight payload: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }

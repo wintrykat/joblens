@@ -43,6 +43,30 @@ export type GeoMethod = z.infer<typeof GeoMethodSchema>;
 export const ThemePreferenceSchema = z.enum(['default', 'light', 'dark']);
 export type ThemePreference = z.infer<typeof ThemePreferenceSchema>;
 
+/** Hard-gate preflight: auto runs Haiku on job view; hybrid is local-only until Quick check. */
+export const PreflightModeSchema = z.enum(['auto', 'hybrid']);
+export type PreflightMode = z.infer<typeof PreflightModeSchema>;
+
+export const PreflightVerdictSchema = z.enum([
+  'clear',
+  'soft',
+  'hard_skip',
+  'unknown',
+]);
+export type PreflightVerdict = z.infer<typeof PreflightVerdictSchema>;
+
+export const PreflightResultSchema = z.object({
+  verdict: PreflightVerdictSchema,
+  reasons: z.array(z.string()).default([]),
+  sources: z.array(z.enum(['local', 'haiku'])).default([]),
+  workModelHint: z.string().optional(),
+  orgHint: z.string().optional(),
+  geoNote: z.string().optional(),
+  flags: z.array(z.string()).default([]),
+});
+export type PreflightResult = z.infer<typeof PreflightResultSchema>;
+
+
 export const FitLabelSchema = z.enum([
   'Perfect fit',
   'Excellent fit',
@@ -159,6 +183,19 @@ export const RemotePreferenceSchema = z.enum([
 ]);
 export type RemotePreference = z.infer<typeof RemotePreferenceSchema>;
 
+/**
+ * How often the candidate will travel onsite outside commute radii
+ * for otherwise-remote / light-hybrid roles. none = no exception (default).
+ */
+export const OccasionalTravelAllowanceSchema = z.enum([
+  'none',
+  'weekly',
+  'monthly',
+  'quarterly',
+  'yearly',
+]);
+export type OccasionalTravelAllowance = z.infer<typeof OccasionalTravelAllowanceSchema>;
+
 export const ClearancePolicySchema = z.enum(['ignore', 'flag', 'skip']);
 export type ClearancePolicy = z.infer<typeof ClearancePolicySchema>;
 
@@ -214,6 +251,11 @@ export const PreferencesSchema = z.object({
   remotePreference: RemotePreferenceSchema.default('neutral'),
   /** When true, onsite/hybrid roles are hard-skipped (geo intent without ZIPs). */
   remoteOnly: z.boolean().default(false),
+  /**
+   * Allow light onsite travel outside ZIP radii up to this cadence
+   * (preflight Soft instead of Hard skip; full Scan softens commute hard-gates).
+   */
+  occasionalTravelAllowance: OccasionalTravelAllowanceSchema.default('none'),
   requireRelocationSubsidyOutsideMetros: z.boolean().default(false),
   employmentPriority: z.array(EmploymentPrioritySchema).default([]),
   minContractMonths: z.number().finite().nonnegative().nullable().default(null),
@@ -333,6 +375,8 @@ export type Bookmark = z.infer<typeof BookmarkSchema>;
 export const ConfigSchema = z.object({
   apiKey: z.string().default(''),
   model: z.string().min(1),
+  /** Hard-gate preflight trigger: auto on view vs hybrid (Quick check for Haiku). */
+  preflightMode: PreflightModeSchema.default('auto'),
   education: z.string().default(''),
   /** Free-text work-authorization note for matching (no personal identity required). */
   workAuthorizationNote: z.string().default(''),

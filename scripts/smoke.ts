@@ -18,6 +18,18 @@ import {
   hasGeoIntent,
 } from '../src/lib/storage';
 import {
+  allowsOccasionalTravelOutsideRadius,
+  detectOnsiteTravelCadence,
+  humanizePreflightReason,
+  listingKeyFromHref,
+  looksUnrestrictedRemoteResidency,
+  mergePreflightResults,
+  preflightCacheKey,
+  runLocalPreflight,
+  sanitizeHaikuResidencySkip,
+} from '../src/lib/preflight';
+import { parsePreflightPayload } from '../src/types/messages';
+import {
   applyConfigProposalChanges,
   assertImportableFile,
   parseConfigProposal,
@@ -25,6 +37,7 @@ import {
   CONFIG_PROPOSAL_PATHS,
 } from '../src/lib/docImport';
 import {
+  ConfigSchema,
   DEFAULT_PREFERENCES,
   DEFAULT_ROLE_SKIP_CATEGORIES,
   EMPTY_ANALYSIS,
@@ -55,7 +68,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.2.1', 'manifest version');
+assert(manifest.version === '1.3.0', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
@@ -478,6 +491,184 @@ assert(boardDisplayNames().includes('Ashby'), 'names');
   assert(merged.preferences.remoteOnly === true, 'merge remoteOnly');
   assert(merged.locations.some((l) => l.zip === '78758'), 'merge locations');
   assert(merged.apiKey === '', 'apiKey untouched');
+}
+
+{
+  assert(DEFAULT_CONFIG.preflightMode === 'auto', 'preflightMode default auto');
+  assert(ConfigSchema.parse({ model: 'claude-sonnet-5' }).preflightMode === 'auto', 'schema preflight default');
+  assert(
+    ConfigSchema.parse({ model: 'claude-sonnet-5', preflightMode: 'hybrid' }).preflightMode ===
+      'hybrid',
+    'schema preflight hybrid'
+  );
+
+  const geoOnsite = runLocalPreflight({
+    cfg: {
+      ...DEFAULT_CONFIG,
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+    },
+    pageText:
+      'Acme Corp — Software Engineer\nLocation: New York, NY 10001\nWork model: On-site in office daily.\nJob description: '.padEnd(
+        500,
+        'x'
+      ),
+    pageTitle: 'Software Engineer - Acme',
+  });
+  assert(geoOnsite.verdict === 'hard_skip', 'local geo onsite excluded → hard_skip');
+  assert(geoOnsite.sources.includes('local'), 'local source');
+
+  const blocked = runLocalPreflight({
+    cfg: {
+      ...DEFAULT_CONFIG,
+      preferences: { ...DEFAULT_PREFERENCES, blockedEmployers: ['EvilCorp'] },
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+    },
+    pageText: 'EvilCorp hiring Full Stack Lead\nFully remote\nJob description: build APIs '.padEnd(
+      500,
+      'y'
+    ),
+    pageTitle: 'Full Stack - EvilCorp',
+  });
+  assert(blocked.verdict === 'hard_skip', 'blocked employer → hard_skip');
+
+  const remoteFar = runLocalPreflight({
+    cfg: {
+      ...DEFAULT_CONFIG,
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+    },
+    pageText:
+      'Acme — Engineer\nLocation: New York, NY 10001\nFully remote / work from home\nJob description: '.padEnd(
+        500,
+        'z'
+      ),
+  });
+  assert(remoteFar.verdict !== 'hard_skip', 'remote JD + far ZIP → not hard_skip from geo alone');
+
+  const mergedPf = mergePreflightResults(
+    {
+      verdict: 'hard_skip',
+      reasons: ['local geo'],
+      sources: ['local'],
+      flags: ['geo_excluded'],
+    },
+    {
+      verdict: 'clear',
+      reasons: ['haiku clear'],
+      sources: ['haiku'],
+      flags: [],
+    }
+  );
+  assert(mergedPf.verdict === 'hard_skip', 'merge keeps local hard_skip');
+
+  const haikuSoft = parsePreflightPayload({
+    verdict: 'soft',
+    reasons: ['clearance language'],
+    workModel: 'hybrid',
+    organization: 'Acme',
+    flags: ['clearance'],
+  });
+  assert(haikuSoft.verdict === 'soft' && haikuSoft.workModelHint === 'hybrid', 'parse preflight payload');
+
+  const nationwideText =
+    'SmartPlace — Full Stack .NET Developer\nMadison, WI · Remote\nNOTE: No WI residency required. Open to nationwide candidates. This position is currently remote.';
+  assert(looksUnrestrictedRemoteResidency(nationwideText), 'nationwide remote detected');
+
+  const badResidencySkip = sanitizeHaikuResidencySkip(
+    {
+      verdict: 'hard_skip',
+      reasons: [
+        'Position located in Madison, WI; workEligibleRegions limited to TX and PA only',
+      ],
+      sources: ['haiku'],
+      flags: ['residency_excluded'],
+      workModelHint: 'remote',
+    },
+    nationwideText
+  );
+  assert(badResidencySkip.verdict === 'clear', 'demote nationwide residency false hard_skip');
+  assert(
+    !/workEligibleRegions/.test(humanizePreflightReason(badResidencySkip.reasons[1] || '')),
+    'humanize drops camelCase field name'
+  );
+  assert(
+    /your remote residency regions/.test(
+      humanizePreflightReason(
+        'Position located in Madison, WI; workEligibleRegions limited to TX and PA only'
+      )
+    ),
+    'humanize workEligibleRegions'
+  );
+
+  assert(
+    listingKeyFromHref(
+      'https://www.ziprecruiter.com/jobs-search?search=x&lk=abc123'
+    ) === 'abc123',
+    'listingKey lk'
+  );
+  assert(
+    preflightCacheKey({
+      href: 'https://www.ziprecruiter.com/jobs-search?lk=abc123',
+      canonicalUrl: 'https://www.ziprecruiter.com/c/Acme/Job/Old',
+    }) === 'lk:abc123',
+    'cache prefers lk over sticky canonical'
+  );
+  assert(
+    preflightCacheKey({
+      href: 'https://www.ziprecruiter.com/jobs-search?lk=abc123',
+      canonicalUrl: 'https://www.ziprecruiter.com/c/Acme/Job/A',
+    }) !==
+      preflightCacheKey({
+        href: 'https://www.ziprecruiter.com/jobs-search?lk=xyz999',
+        canonicalUrl: 'https://www.ziprecruiter.com/c/Acme/Job/A',
+      }),
+    'different lk → different cache keys'
+  );
+
+  assert(DEFAULT_PREFERENCES.occasionalTravelAllowance === 'none', 'travel allowance default none');
+
+  const quarterlyRemote = `
+    Sr. Full Stack Developer — Dallas, TX 75019 · Remote
+    This is a direct-hire position working primarily remote, with occasional on-site presence required in Coppell / Dallas, TX.
+    Enjoy the flexibility of a remote work model (Texas-based preferred; quarterly on-site meetings in DFW).
+    Job description: build APIs and UIs.
+  `.padEnd(500, ' ');
+
+  assert(detectOnsiteTravelCadence(quarterlyRemote) === 'quarterly', 'detect quarterly travel');
+  assert(
+    allowsOccasionalTravelOutsideRadius('quarterly', 'quarterly'),
+    'quarterly allowance accepts quarterly'
+  );
+  assert(
+    !allowsOccasionalTravelOutsideRadius('quarterly', 'weekly'),
+    'quarterly allowance rejects weekly'
+  );
+  assert(!allowsOccasionalTravelOutsideRadius('none', 'quarterly'), 'none rejects all travel');
+
+  const travelSoft = runLocalPreflight({
+    cfg: {
+      ...DEFAULT_CONFIG,
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+      preferences: {
+        ...DEFAULT_PREFERENCES,
+        occasionalTravelAllowance: 'quarterly',
+      },
+    },
+    pageText: quarterlyRemote,
+  });
+  assert(travelSoft.verdict === 'soft', 'quarterly remote outside radius → soft when allowed');
+
+  const travelHard = runLocalPreflight({
+    cfg: {
+      ...DEFAULT_CONFIG,
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+      preferences: {
+        ...DEFAULT_PREFERENCES,
+        occasionalTravelAllowance: 'none',
+      },
+    },
+    pageText: quarterlyRemote,
+  });
+  assert(travelHard.verdict === 'hard_skip', 'same JD hard_skip when allowance none');
 }
 
 console.log(fails ? `\n${fails} FAILURES` : '\nALL PASSED');

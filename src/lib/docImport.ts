@@ -24,6 +24,7 @@ export const CONFIG_PROPOSAL_PATHS = [
   'workHistory',
   'preferences.remoteOnly',
   'preferences.remotePreference',
+  'preferences.occasionalTravelAllowance',
   'preferences.requireRelocationSubsidyOutsideMetros',
   'preferences.employmentPriority',
   'preferences.minContractMonths',
@@ -289,6 +290,17 @@ export function applyConfigProposalChanges(
       case 'preferences.remotePreference':
         if (value === 'prefer_remote' || value === 'neutral' || value === 'prefer_onsite') {
           prefs = setPref(prefs, 'remotePreference', value);
+        }
+        break;
+      case 'preferences.occasionalTravelAllowance':
+        if (
+          value === 'none' ||
+          value === 'weekly' ||
+          value === 'monthly' ||
+          value === 'quarterly' ||
+          value === 'yearly'
+        ) {
+          prefs = setPref(prefs, 'occasionalTravelAllowance', value);
         }
         break;
       case 'preferences.requireRelocationSubsidyOutsideMetros':

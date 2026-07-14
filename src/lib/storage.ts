@@ -26,6 +26,7 @@ import {
 export const DEFAULT_CONFIG: Config = {
   apiKey: '',
   model: DEFAULT_CLAUDE_MODEL,
+  preflightMode: 'auto',
   education: '',
   workAuthorizationNote: '',
   locations: [],

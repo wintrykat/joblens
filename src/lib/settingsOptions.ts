@@ -22,6 +22,30 @@ export const CLAUDE_MODELS: readonly ClaudeModelOption[] = [
 
 export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
 
+/** Fixed model for hard-gate preflight (independent of Scan model). */
+export const PREFLIGHT_CLAUDE_MODEL = 'claude-haiku-4-5';
+
+export const PREFLIGHT_MODE_OPTIONS = [
+  {
+    id: 'auto' as const,
+    label: 'Auto on job view',
+    note: 'Runs a cheap Haiku hard-gate check when a listing is open (after free local checks).',
+  },
+  {
+    id: 'hybrid' as const,
+    label: 'Hybrid (Quick check)',
+    note: 'Local checks always run; Haiku only when you click Quick check on the launcher.',
+  },
+] as const;
+
+export const OCCASIONAL_TRAVEL_OPTIONS = [
+  { id: 'none' as const, label: 'None' },
+  { id: 'weekly' as const, label: 'Up to weekly' },
+  { id: 'monthly' as const, label: 'Up to monthly' },
+  { id: 'quarterly' as const, label: 'Up to quarterly' },
+  { id: 'yearly' as const, label: 'Up to yearly' },
+] as const;
+
 /**
  * Education levels useful for JD matching across US, UK, IN, IE, AU, NZ, SE, NO, FI, CA.
  * Labels sorted alphabetically.

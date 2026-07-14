@@ -97,6 +97,7 @@ Geography:
   - If work-eligible regions is empty / "(none)": treat that as NO residency filter — all remote residency is OK. Do not exclude a remote role for region mismatch against an empty list. Remote with no stated restriction remains eligible.
   - If held skills are "(none)" (no skillClaims held / proficiencies / extracted skills): do not invent skill matches. Prefer status mismatch/partial only where the posting states concrete skills; Fit should stay conservative (Possible fit 75 or Unlikely 60) unless the posting is essentially skill-light. Say the profile has no held skills in Fit rationale when relevant.
 - onsite/hybrid (when locations ARE configured and remoteOnly is false): eligible if the work location is within radius of ANY of the candidate's locations; otherwise excluded; "unclear" if no posting location is stated.
+- occasionalTravelAllowance (none|weekly|monthly|quarterly|yearly): when not "none", and the posting is primarily remote / light hybrid with onsite visits at most that often (and not daily / multi-day office weeks), do NOT treat outside-radius commute as a hard dealbreaker — note Soft concern in Fit/Apply rationale and keep geo "excluded" or "eligible" with travel nuance in reason. When allowance is "none", outside-radius onsite/hybrid remains a hard gate. Daily or several days/week in office outside radius stays a hard gate regardless of allowance.
 - remote (when regions ARE configured): if the posting restricts residency to regions/states/countries, it is eligible only when at least one is in the candidate's work-eligible regions; if it restricts to regions NOT in that list -> excluded. Remote with no stated restriction -> eligible.
 - Apply remotePreference as a soft Fit weight (prefer_remote boosts remote-eligible roles; prefer_onsite boosts onsite/hybrid when eligible); never make remotePreference alone force Apply "no". remoteOnly is the hard gate for skipping onsite/hybrid.
 - When requireRelocationSubsidyOutsideMetros is true and the posting requires relocation outside the candidate's metro/ZIP radii without subsidy language, flag as a soft concern in Fit rationale (hard dealbreaker only if wording clearly makes relocation mandatory with no support and prefer_onsite/gates demand it).
@@ -196,6 +197,7 @@ export function buildAnalysisUser({
   const preferencesBlock = {
     remotePreference: prefs.remotePreference,
     remoteOnly: prefs.remoteOnly,
+    occasionalTravelAllowance: prefs.occasionalTravelAllowance,
     requireRelocationSubsidyOutsideMetros: prefs.requireRelocationSubsidyOutsideMetros,
     employmentPriority: prefs.employmentPriority,
     employmentPriorityLabels: employmentLabels || null,
@@ -285,8 +287,8 @@ Return a bare JSON object, no prose, no code fences:
 }
 
 Rules:
-- Only propose paths from this allowlist: education, workAuthorizationNote, locations, workEligibleRegions, skillClaims, deficiencies, skipTriggers, workHistory, preferences.remoteOnly, preferences.remotePreference, preferences.requireRelocationSubsidyOutsideMetros, preferences.employmentPriority, preferences.minContractMonths, preferences.clearancePolicy, preferences.clearanceIncludePreferred, preferences.clearanceSkipUntil, preferences.blockedEmployers, preferences.roleSkipCategories, preferences.flagShellEmployers, preferences.flagPermNotices, preferences.compensationMode, preferences.compensationMinUsd, preferences.compensationMaxUsd, preferences.flagSuspiciousComp, preferences.preferStructuredWork, preferences.pipelineLoad, preferences.targetStartDate, preferences.availableImmediately, preferences.noticePeriodWeeks.
-- Never propose apiKey, model, theme, bookmarks, roleFamilies, or extractedSkills.
+- Only propose paths from this allowlist: education, workAuthorizationNote, locations, workEligibleRegions, skillClaims, deficiencies, skipTriggers, workHistory, preferences.remoteOnly, preferences.remotePreference, preferences.occasionalTravelAllowance, preferences.requireRelocationSubsidyOutsideMetros, preferences.employmentPriority, preferences.minContractMonths, preferences.clearancePolicy, preferences.clearanceIncludePreferred, preferences.clearanceSkipUntil, preferences.blockedEmployers, preferences.roleSkipCategories, preferences.flagShellEmployers, preferences.flagPermNotices, preferences.compensationMode, preferences.compensationMinUsd, preferences.compensationMaxUsd, preferences.flagSuspiciousComp, preferences.preferStructuredWork, preferences.pipelineLoad, preferences.targetStartDate, preferences.availableImmediately, preferences.noticePeriodWeeks.
+- Never propose apiKey, model, theme, bookmarks, roleFamilies, extractedSkills, or preflightMode.
 - Never invent ZIP codes. Only include locations when the text clearly states a postal code or unambiguous home metro with a real US ZIP.
 - skillClaims: array of { skill, standing: "held"|"ramp"|"never_claim", years?, lastUsed?, scopeNote?, confidence? }. Prefer held only when evidenced; use ramp/never_claim when the seeker says so. This is the single skills list.
 - workHistory entries: { org, title, start, end, description }. Stay conservative.
@@ -312,4 +314,86 @@ ${args.documentText}
 
 Return the proposal JSON.`;
 }
+
+export const PREFLIGHT_SYSTEM = `You perform a LIGHT hard-gate preflight on ONE job posting. Return bare JSON only (no prose, no fences).
+
+Output shape:
+{
+  "verdict": "clear" | "soft" | "hard_skip" | "unknown",
+  "reasons": string[],
+  "workModel": "onsite" | "hybrid" | "remote" | "unclear",
+  "organization": string,
+  "geoNote": string,
+  "flags": string[]
+}
+
+Rules:
+- Only decide hard gates from HARD_GATES below. Do NOT score Fit, skills, or Apply.
+- Prefer false negatives: if unsure → "unknown" or "soft", never invent a hard_skip.
+- hard_skip only when evidence is clear for a listed hard gate (blocked employer, remoteOnly vs onsite/hybrid, clearance skip policy, enabled skip categories, PERM/shell when those flags are on, or obvious commute geo exclude for onsite/hybrid).
+- soft = possible concern but not definitive.
+- clear = no hard-gate hits found in the text provided.
+- flags: short machine ids when relevant (e.g. blocked_employer, remote_only, clearance, perm, shell, geo_excluded, skip_category, residency_excluded).
+- Keep reasons to 1–3 short human-readable strings (never camelCase config field names). Prefer wording like "Your remote residency is limited to TX, PA" not "workEligibleRegions…".
+- organization: best guess company name if present, else "".
+
+Geography / residency (critical — follow exactly):
+- Commute locations (when configured) apply to onsite/hybrid only. Do not hard_skip a remote role because the employer's listed city/HQ is outside commute ZIPs.
+- candidateRemoteResidency.regions = where the CANDIDATE may live/work FROM for remote roles. Empty regions list = no residency filter (all remote OK).
+- For remote roles: hard_skip for residency ONLY if the posting EXPLICITLY restricts employee residency/work location to a set of regions/states/countries and NONE of those intersect the candidate's list.
+- Remote + "nationwide", "open to all US", "no [state] residency required", or no residency restriction → clear for residency (even if HQ/city is listed).
+- Listing a city next to Remote (e.g. "Madison, WI · Remote") is NOT a residency restriction by itself.`;
+
+export function buildPreflightUser(args: {
+  hardGatesJson: string;
+  url: string;
+  pageText: string;
+  localHintJson?: string;
+}): string {
+  const local = args.localHintJson
+    ? `\nLOCAL_PREFLIGHT (deterministic; do not clear a hard_skip):\n${args.localHintJson}\n`
+    : '';
+  return `HARD_GATES:
+${args.hardGatesJson}
+${local}
+URL: ${args.url}
+
+JOB POSTING (truncated for preflight):
+---
+${args.pageText}
+---
+
+Return the preflight JSON.`;
+}
+
+export function buildPreflightHardGates(profile: Config): Record<string, unknown> {
+  const prefs = profile.preferences ?? DEFAULT_PREFERENCES;
+  const enabledSkips = Object.entries(prefs.roleSkipCategories)
+    .filter(([, on]) => on)
+    .map(([id]) => id);
+  const regions = (profile.workEligibleRegions ?? []).map((r) => r.trim()).filter(Boolean);
+  return {
+    remoteOnly: prefs.remoteOnly,
+    occasionalTravelAllowance: prefs.occasionalTravelAllowance,
+    blockedEmployers: prefs.blockedEmployers.filter((e) => e.trim().length >= 2),
+    clearancePolicy: prefs.clearancePolicy,
+    clearanceIncludePreferred: prefs.clearanceIncludePreferred,
+    clearanceSkipUntil: prefs.clearanceSkipUntil || null,
+    roleSkipCategories: enabledSkips,
+    flagShellEmployers: prefs.flagShellEmployers,
+    flagPermNotices: prefs.flagPermNotices || profile.flagPermNotices,
+    commuteLocationsConfigured: (profile.locations ?? []).length > 0,
+    candidateRemoteResidency: {
+      regions,
+      emptyMeansNoFilter: regions.length === 0,
+      rule:
+        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency to regions outside this list. Nationwide / no residency required → do not hard_skip. Do not treat employer city/HQ alone as a residency restriction.',
+    },
+    occasionalTravelRule:
+      prefs.occasionalTravelAllowance === 'none'
+        ? 'No outside-radius travel exception; hybrid/onsite outside commute ZIPs → hard_skip.'
+        : `Allow Soft (not hard_skip) for primarily remote / light hybrid with onsite visits up to ${prefs.occasionalTravelAllowance}. Daily/multi-day office weeks outside radius remain hard_skip.`,
+  };
+}
+
 

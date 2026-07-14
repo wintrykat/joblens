@@ -7,6 +7,8 @@ import type {
   ExtractSkillsSuccessData,
   GetPageTextSuccessData,
   OpenSidePanelRequest,
+  PreflightJdRequest,
+  PreflightJdSuccessData,
   ProposeConfigFromDocsSuccessData,
 } from '../types/messages';
 import {
@@ -47,6 +49,12 @@ export function analyzeJd(
   req: Omit<AnalyzeJdRequest, 'type'>
 ): Promise<ExtensionResponse<AnalyzeJdSuccessData>> {
   return sendMessage({ type: 'ANALYZE_JD', ...req });
+}
+
+export function preflightJd(
+  req: Omit<PreflightJdRequest, 'type'>
+): Promise<ExtensionResponse<PreflightJdSuccessData>> {
+  return sendMessage({ type: 'PREFLIGHT_JD', ...req });
 }
 
 export function proposeConfigFromDocs(req: {
