@@ -65,9 +65,23 @@ npm run dev         # HMR; still use Load unpacked from dist/ for full extension
 
 Stack: TypeScript (strict) + React + Zod + Vite + CRXJS.
 
+## How this was built (and what that implies)
+
+JobLens was **vibe coded with [Cursor](https://cursor.com)** — an AI coding agent drove most of the implementation from product intent, with a human steering goals and spot-checking behavior. Treat it as a useful personal tool, not a polished, fully audited product.
+
+**Implications to assume:**
+
+- **Coverage is uneven.** There are smoke checks for boards, geo, and JSON shape, not a full unit/E2E suite. Board URL matchers and DOM extractors can break when sites redesign without anyone noticing immediately.
+- **AI judgment is fallible.** Fit / Apply / skill match / dealbreakers come from the model plus a few deterministic floors. Wrong or overconfident triage will happen; the human still decides whether to apply.
+- **Security was reviewed lightly, not as a formal audit.** Do not reuse this pattern for multi-user, enterprise, or high-stakes credential handling without your own review. The API key lives in extension storage by design.
+- **Prompt and schema drift.** Prompt text, Zod shapes, and Claude model behavior can interact badly after upgrades; expect occasional parse errors or odd ratings until prompts are retuned.
+- **History was reset for public release.** Prefer reading the current tree and docs over archaeology; there is little curated commit narrative.
+
+If something looks wrong, distrust the panel and open an issue — or fork and harden the path you care about.
+
 ## Security
 
-See [SECURITY.md](SECURITY.md). Report issues privately if they involve credential leakage.
+See [SECURITY.md](SECURITY.md). Report issues privately if they involve credential leakage. Given the AI-assisted origin, treat any security report as more likely than for a traditionally reviewed codebase.
 
 ## License
 

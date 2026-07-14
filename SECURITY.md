@@ -1,5 +1,7 @@
 # Security
 
+JobLens was largely developed with AI assistance (Cursor). Treat the codebase as **personally useful and imperfectly reviewed**, not as having received a formal security audit. Prefer defense-in-depth if you adapt it beyond a single-operator Chrome profile.
+
 ## Do not commit secrets
 
 Never commit:
