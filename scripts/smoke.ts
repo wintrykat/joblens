@@ -8,9 +8,27 @@ import {
   boardDisplayNames,
 } from '../src/lib/boards';
 import { analysisToJson } from '../src/lib/jsonExport';
-import { computeDeterministicGeo } from '../src/lib/geo';
-import { applyRatingFloors, ONSITE_COMMUTE_DEALBREAKER } from '../src/lib/ratings';
-import { EMPTY_ANALYSIS } from '../src/types/domain';
+import { computeDeterministicGeo, applyDeterministicGeo, NO_LOCATIONS_GEO_REASON } from '../src/lib/geo';
+import { applyRatingFloors, BLOCKED_EMPLOYER_DEALBREAKER, ONSITE_COMMUTE_DEALBREAKER, REMOTE_ONLY_DEALBREAKER } from '../src/lib/ratings';
+import { buildAnalysisUser, ANALYSIS_SYSTEM } from '../src/lib/prompts';
+import {
+  DEFAULT_CONFIG,
+  assessProfileCompleteness,
+  effectiveSkipTriggers,
+  hasGeoIntent,
+} from '../src/lib/storage';
+import {
+  applyConfigProposalChanges,
+  assertImportableFile,
+  parseConfigProposal,
+  sanitizeConfigForPropose,
+  CONFIG_PROPOSAL_PATHS,
+} from '../src/lib/docImport';
+import {
+  DEFAULT_PREFERENCES,
+  DEFAULT_ROLE_SKIP_CATEGORIES,
+  EMPTY_ANALYSIS,
+} from '../src/types/domain';
 
 const manifest = JSON.parse(
   readFileSync(new URL('../dist/manifest.json', import.meta.url), 'utf8')
@@ -37,7 +55,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.1.0', 'manifest version');
+assert(manifest.version === '1.2.0', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
@@ -218,6 +236,238 @@ assert(boardDisplayNames().includes('Ashby'), 'names');
     'dealbreaker title inverted'
   );
   assert(analysisToJson(floored, {}).fit.score <= 60, 'json fit floor');
+}
+
+{
+  const blocked = applyRatingFloors(
+    {
+      ...EMPTY_ANALYSIS,
+      masthead: { ...EMPTY_ANALYSIS.masthead, organization: 'Acme Staffing LLC' },
+      fit: { label: 'Good fit', score: 85, rationale: 'ok' },
+      apply: { verdict: 'yes', rationale: 'ok' },
+    },
+    {
+      ...DEFAULT_CONFIG,
+      preferences: {
+        ...DEFAULT_PREFERENCES,
+        blockedEmployers: ['Acme Staffing'],
+      },
+    }
+  );
+  assert(blocked.apply.verdict === 'no', 'blocked employer apply no');
+  assert(
+    blocked.dealbreakers.some((d) => d.requirement === BLOCKED_EMPLOYER_DEALBREAKER),
+    'blocked employer dealbreaker'
+  );
+}
+
+{
+  const user = buildAnalysisUser({
+    profile: {
+      ...DEFAULT_CONFIG,
+      education: 'Bachelor of Science (BSc / BS)',
+      skillClaims: [
+        { skill: 'TypeScript', standing: 'held', years: 5 },
+        { skill: 'Rust', standing: 'ramp', years: 1 },
+        { skill: 'Cobol', standing: 'never_claim' },
+      ],
+      preferences: {
+        ...DEFAULT_PREFERENCES,
+        remotePreference: 'prefer_remote',
+        clearancePolicy: 'skip',
+      },
+    },
+    url: 'https://example.com/job/1',
+    pageText: 'Sample posting',
+  });
+  assert(user.includes('PREFERENCES'), 'analysis user has PREFERENCES');
+  assert(user.includes('prefer_remote'), 'analysis user remote pref');
+  assert(user.includes('Never-claim skills: Cobol'), 'analysis user never-claim');
+  assert(user.includes('"clearancePolicy": "skip"'), 'analysis user clearance');
+}
+
+{
+  const triggers = effectiveSkipTriggers({
+    ...DEFAULT_CONFIG,
+    preferences: {
+      ...DEFAULT_PREFERENCES,
+      flagPermNotices: true,
+      flagShellEmployers: true,
+      roleSkipCategories: {
+        ...DEFAULT_ROLE_SKIP_CATEGORIES,
+        ml_training: true,
+      },
+    },
+  });
+  assert(triggers.some((t) => /PERM/i.test(t)), 'perm skip injected');
+  assert(triggers.some((t) => /shell|unverifiable/i.test(t)), 'shell skip injected');
+  assert(triggers.some((t) => /training ML|LLM models/i.test(t)), 'category skip injected');
+  assert(
+    !effectiveSkipTriggers(DEFAULT_CONFIG).some((t) => /training ML|LLM models/i.test(t)),
+    'category skips off by default'
+  );
+}
+
+{
+  assert(!hasGeoIntent(DEFAULT_CONFIG), 'DEFAULT_CONFIG has no geo intent');
+  const blank = assessProfileCompleteness(DEFAULT_CONFIG);
+  assert(blank.incomplete, 'DEFAULT_CONFIG geo incomplete');
+  assert(/Geography required/i.test(blank.message), 'blank message is geo-required');
+  assert(!/skills/i.test(blank.geoRequiredMessage), 'geo message does not mix skills');
+
+  assert(
+    hasGeoIntent({
+      ...DEFAULT_CONFIG,
+      preferences: { ...DEFAULT_PREFERENCES, remoteOnly: true },
+    }),
+    'remoteOnly alone is geo intent'
+  );
+  assert(
+    hasGeoIntent({
+      ...DEFAULT_CONFIG,
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+    }),
+    'ZIP alone is geo intent'
+  );
+  assert(
+    hasGeoIntent({
+      ...DEFAULT_CONFIG,
+      workEligibleRegions: ['TX'],
+    }),
+    'regions alone is geo intent'
+  );
+
+  const withGeoNoSkills = assessProfileCompleteness({
+    ...DEFAULT_CONFIG,
+    preferences: { ...DEFAULT_PREFERENCES, remoteOnly: true },
+  });
+  assert(!withGeoNoSkills.incomplete, 'remoteOnly unlocks geo');
+  assert(/held skills/i.test(withGeoNoSkills.skillsWarning), 'skills soft warning');
+
+  const blankUser = buildAnalysisUser({
+    profile: DEFAULT_CONFIG,
+    url: 'https://example.com/job/blank',
+    pageText: 'Onsite engineer in Austin',
+  });
+  assert(blankUser.includes('Held skills: (none)'), 'blank user held none');
+  assert(blankUser.includes('Onsite/hybrid locations: (none)'), 'blank user locs none');
+  assert(blankUser.includes('PROFILE_EMPTY_HINTS'), 'blank user empty hints');
+  assert(blankUser.includes('no residency filter'), 'blank regions semantics in user');
+  assert(ANALYSIS_SYSTEM.includes('Empty-list semantics'), 'system empty-list semantics');
+  assert(ANALYSIS_SYSTEM.includes('NO residency filter'), 'system regions empty semantics');
+  assert(ANALYSIS_SYSTEM.includes('remoteOnly'), 'system remoteOnly rule');
+
+  const noLocGeo = applyDeterministicGeo(
+    {
+      ...EMPTY_ANALYSIS,
+      masthead: { ...EMPTY_ANALYSIS.masthead, workModel: 'onsite' },
+      geo: { verdict: 'eligible', reason: 'model invented', method: 'model' },
+    },
+    { locations: [], pageText: 'Austin, TX onsite' }
+  );
+  assert(noLocGeo.geo?.verdict === 'unclear', 'empty locations onsite → unclear');
+  assert(noLocGeo.geo?.reason === NO_LOCATIONS_GEO_REASON, 'empty locations reason');
+  assert(
+    !noLocGeo.dealbreakers.some((d) => /commute radius/i.test(d.requirement)),
+    'empty locations does not add commute dealbreaker'
+  );
+
+  const remoteOnlyFloored = applyRatingFloors(
+    {
+      ...EMPTY_ANALYSIS,
+      masthead: { ...EMPTY_ANALYSIS.masthead, workModel: 'onsite' },
+      fit: { label: 'Excellent fit', score: 95, rationale: 'skills ok' },
+      apply: { verdict: 'yes', rationale: 'ok' },
+    },
+    {
+      ...DEFAULT_CONFIG,
+      preferences: { ...DEFAULT_PREFERENCES, remoteOnly: true },
+    }
+  );
+  assert(remoteOnlyFloored.apply.verdict === 'no', 'remoteOnly onsite apply no');
+  assert(
+    remoteOnlyFloored.dealbreakers.some((d) => d.requirement === REMOTE_ONLY_DEALBREAKER),
+    'remoteOnly dealbreaker'
+  );
+  assert(remoteOnlyFloored.fit.score <= 60, 'remoteOnly fit capped');
+}
+
+{
+  let docRejected = false;
+  try {
+    assertImportableFile('resume.doc');
+  } catch {
+    docRejected = true;
+  }
+  assert(docRejected, '.doc rejected');
+  assert(assertImportableFile('notes.md') === '.md', '.md allowed');
+  assert(assertImportableFile('cv.pdf') === '.pdf', '.pdf allowed');
+
+  const sanitized = sanitizeConfigForPropose({
+    ...DEFAULT_CONFIG,
+    apiKey: 'sk-secret',
+  });
+  assert(!('apiKey' in sanitized), 'sanitized omits apiKey');
+
+  const proposal = parseConfigProposal({
+    summary: 'From resume',
+    changes: [
+      {
+        id: '1',
+        path: 'skillClaims',
+        label: 'Add TypeScript',
+        rationale: 'Listed on resume',
+        value: [{ skill: 'TypeScript', standing: 'held', years: 4 }],
+      },
+      {
+        id: '2',
+        path: 'apiKey',
+        label: 'steal key',
+        rationale: 'bad',
+        value: 'nope',
+      },
+      {
+        id: '3',
+        path: 'preferences.remoteOnly',
+        label: 'Remote only',
+        rationale: 'Notes say remote only',
+        value: true,
+      },
+    ],
+  });
+  assert(proposal.changes.length === 2, 'invalid paths filtered');
+  assert(
+    proposal.changes.every((c) => (CONFIG_PROPOSAL_PATHS as readonly string[]).includes(c.path)),
+    'only allowlisted paths'
+  );
+
+  const merged = applyConfigProposalChanges(DEFAULT_CONFIG, [
+    {
+      id: '1',
+      path: 'skillClaims',
+      label: 'Add TypeScript',
+      rationale: '',
+      value: [{ skill: 'TypeScript', standing: 'held', years: 4 }],
+    },
+    {
+      id: '3',
+      path: 'preferences.remoteOnly',
+      label: 'Remote only',
+      rationale: '',
+      value: true,
+    },
+    {
+      id: '4',
+      path: 'locations',
+      label: 'ZIP',
+      rationale: '',
+      value: [{ zip: '78758', radiusMiles: 25 }],
+    },
+  ]);
+  assert(merged.skillClaims.some((c) => c.skill === 'TypeScript'), 'merge skillClaims');
+  assert(merged.preferences.remoteOnly === true, 'merge remoteOnly');
+  assert(merged.locations.some((l) => l.zip === '78758'), 'merge locations');
+  assert(merged.apiKey === '', 'apiKey untouched');
 }
 
 console.log(fails ? `\n${fails} FAILURES` : '\nALL PASSED');

@@ -138,6 +138,106 @@ export const ExtractedSkillSchema = z.object({
 });
 export type ExtractedSkill = z.infer<typeof ExtractedSkillSchema>;
 
+/** How the seeker treats a skill when matching postings. */
+export const SkillStandingSchema = z.enum(['held', 'ramp', 'never_claim']);
+export type SkillStanding = z.infer<typeof SkillStandingSchema>;
+
+export const SkillClaimSchema = z.object({
+  skill: z.string(),
+  standing: SkillStandingSchema.default('held'),
+  years: z.number().finite().nonnegative().optional(),
+  lastUsed: z.string().optional(),
+  scopeNote: z.string().optional(),
+  confidence: ConfidenceSchema.optional(),
+});
+export type SkillClaim = z.infer<typeof SkillClaimSchema>;
+
+export const RemotePreferenceSchema = z.enum([
+  'prefer_remote',
+  'neutral',
+  'prefer_onsite',
+]);
+export type RemotePreference = z.infer<typeof RemotePreferenceSchema>;
+
+export const ClearancePolicySchema = z.enum(['ignore', 'flag', 'skip']);
+export type ClearancePolicy = z.infer<typeof ClearancePolicySchema>;
+
+export const CompensationModeSchema = z.enum(['suspend_floors', 'use_floors']);
+export type CompensationMode = z.infer<typeof CompensationModeSchema>;
+
+export const PipelineLoadSchema = z.enum(['unset', 'light', 'moderate', 'heavy']);
+export type PipelineLoad = z.infer<typeof PipelineLoadSchema>;
+
+/** Ordered employment preference ids (not masthead posting enums). */
+export const EmploymentPrioritySchema = z.enum([
+  'permanent',
+  'contract_to_hire',
+  'long_contract',
+  'short_contract',
+  'part_time',
+]);
+export type EmploymentPriority = z.infer<typeof EmploymentPrioritySchema>;
+
+export const ROLE_FAMILY_IDS = [
+  'software_eng',
+  'support_eng',
+  'other',
+] as const;
+export type RoleFamilyId = (typeof ROLE_FAMILY_IDS)[number];
+
+export const SKIP_CATEGORY_IDS = [
+  'ml_training',
+  'ai_live_tech_interview',
+  'unverifiable_employer',
+] as const;
+export type SkipCategoryId = (typeof SKIP_CATEGORY_IDS)[number];
+
+const RoleSkipCategoriesSchema = z
+  .record(z.string(), z.boolean())
+  .default({})
+  .transform((raw) => {
+    const out = {} as Record<SkipCategoryId, boolean>;
+    for (const id of SKIP_CATEGORY_IDS) {
+      out[id] = Boolean(raw[id]);
+    }
+    return out;
+  });
+
+export const DEFAULT_ROLE_SKIP_CATEGORIES: Record<SkipCategoryId, boolean> = {
+  ml_training: false,
+  ai_live_tech_interview: false,
+  unverifiable_employer: false,
+};
+
+export const PreferencesSchema = z.object({
+  roleFamilies: z.array(z.string()).default([]),
+  remotePreference: RemotePreferenceSchema.default('neutral'),
+  /** When true, onsite/hybrid roles are hard-skipped (geo intent without ZIPs). */
+  remoteOnly: z.boolean().default(false),
+  requireRelocationSubsidyOutsideMetros: z.boolean().default(false),
+  employmentPriority: z.array(EmploymentPrioritySchema).default([]),
+  minContractMonths: z.number().finite().nonnegative().nullable().default(null),
+  clearancePolicy: ClearancePolicySchema.default('ignore'),
+  clearanceIncludePreferred: z.boolean().default(false),
+  clearanceSkipUntil: z.string().default(''),
+  blockedEmployers: z.array(z.string()).default([]),
+  roleSkipCategories: RoleSkipCategoriesSchema,
+  flagShellEmployers: z.boolean().default(false),
+  flagPermNotices: z.boolean().default(true),
+  compensationMode: CompensationModeSchema.default('suspend_floors'),
+  compensationMinUsd: z.number().finite().nonnegative().nullable().default(null),
+  compensationMaxUsd: z.number().finite().nonnegative().nullable().default(null),
+  flagSuspiciousComp: z.boolean().default(false),
+  preferStructuredWork: z.boolean().default(false),
+  pipelineLoad: PipelineLoadSchema.default('unset'),
+  targetStartDate: z.string().default(''),
+  availableImmediately: z.boolean().default(false),
+  noticePeriodWeeks: z.number().finite().nonnegative().nullable().default(null),
+});
+export type Preferences = z.infer<typeof PreferencesSchema>;
+
+export const DEFAULT_PREFERENCES: Preferences = PreferencesSchema.parse({});
+
 export const EMPTY_MASTHEAD = {
   organization: '',
   title: '',
@@ -234,15 +334,23 @@ export const ConfigSchema = z.object({
   apiKey: z.string().default(''),
   model: z.string().min(1),
   education: z.string().default(''),
+  /** Free-text work-authorization note for matching (no personal identity required). */
+  workAuthorizationNote: z.string().default(''),
   locations: z.array(LocationSchema).default([]),
   workEligibleRegions: z.array(z.string()).default([]),
   proficiencies: z.array(z.string()).default([]),
   deficiencies: z.array(z.string()).default([]),
+  /** Structured skill honesty (held / ramp / never-claim). */
+  skillClaims: z.array(SkillClaimSchema).default([]),
   workHistory: z.array(WorkHistoryEntrySchema).default([]),
   extractedSkills: z.array(ExtractedSkillSchema).default([]),
   skipTriggers: z.array(z.string()).default([]),
-  /** When true, analyzer flags PERM labor-certification notices as skip triggers. */
+  /**
+   * Legacy top-level PERM flag. Synced with preferences.flagPermNotices.
+   * Prefer preferences.flagPermNotices going forward.
+   */
   flagPermNotices: z.boolean().default(true),
+  preferences: PreferencesSchema.default(DEFAULT_PREFERENCES),
   /** Appearance: default follows Chrome/OS prefers-color-scheme; light/dark force. */
   theme: ThemePreferenceSchema.default('default'),
   // Soft-parse bookmarks so a single corrupt row cannot brick Options.

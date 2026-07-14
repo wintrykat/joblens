@@ -351,6 +351,30 @@ body {
 
 .loading, .error, .hint, .idle { padding: 8px 2px; color: var(--jl-text-secondary); }
 .error { color: var(--jl-no-fg); }
+.profile-warn {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--jl-mid-bg);
+  color: var(--jl-mid-fg);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.profile-warn-required {
+  background: var(--jl-no-bg);
+  color: var(--jl-no-fg);
+}
+.profile-warn p { margin: 0 0 6px; }
+.profile-warn .linkish {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+}
 .spin {
   display: inline-block;
   width: 12px;

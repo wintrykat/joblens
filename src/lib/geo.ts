@@ -226,9 +226,12 @@ export type ApplyGeoContext = {
   pageText: string;
 };
 
+export const NO_LOCATIONS_GEO_REASON = 'No commute locations configured';
+
 /**
  * Prefer deterministic geo for onsite/hybrid when computable; leave remote to the model.
  * Never feed prior geo.reason back in (avoids reinforcing a bad GEO_HINT).
+ * When locations are empty and work is onsite/hybrid, force geo unclear (no commute dealbreaker).
  */
 export function applyDeterministicGeo(
   analysis: Analysis,
@@ -236,6 +239,20 @@ export function applyDeterministicGeo(
 ): Analysis {
   const model = analysis.workModel ?? analysis.masthead.workModel;
   if (model === 'remote') return analysis;
+
+  const hasLocations = locations.some((l) => l.zip.trim());
+  if (!hasLocations && (model === 'onsite' || model === 'hybrid')) {
+    return {
+      ...analysis,
+      geo: {
+        verdict: 'unclear',
+        reason: NO_LOCATIONS_GEO_REASON,
+        method: 'model',
+        postingZip: null,
+        distanceMiles: null,
+      },
+    };
+  }
 
   const stated = [
     analysis.masthead.location,

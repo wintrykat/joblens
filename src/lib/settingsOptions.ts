@@ -1,3 +1,9 @@
+import type {
+  EmploymentPriority,
+  RoleFamilyId,
+  SkipCategoryId,
+} from '../types/domain';
+
 /** Claude API model IDs available as of 2026-07-13 (Anthropic Claude Platform). */
 export type ClaudeModelOption = {
   id: string;
@@ -48,3 +54,57 @@ export function isPermSkipTrigger(text: string): boolean {
   const t = text.toLowerCase();
   return t.includes('perm') && (t.includes('labor') || t.includes('labour') || t.includes('certification'));
 }
+
+/** Deprecated UI catalog; kept for prompt label lookups on legacy configs. */
+export const ROLE_FAMILY_OPTIONS: ReadonlyArray<{ id: RoleFamilyId; label: string }> = [
+  { id: 'software_eng', label: 'Software engineering' },
+  { id: 'support_eng', label: 'Support / customer engineering' },
+  { id: 'other', label: 'Other' },
+];
+
+export const EMPLOYMENT_PRIORITY_OPTIONS: ReadonlyArray<{
+  id: EmploymentPriority;
+  label: string;
+}> = [
+  { id: 'permanent', label: 'Permanent / full-time' },
+  { id: 'contract_to_hire', label: 'Contract-to-hire' },
+  { id: 'long_contract', label: 'Long contract' },
+  { id: 'short_contract', label: 'Short contract / C2C' },
+  { id: 'part_time', label: 'Part-time / hourly' },
+];
+
+export const SKIP_CATEGORY_OPTIONS: ReadonlyArray<{
+  id: SkipCategoryId;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: 'ml_training',
+    label: 'Jobs whose main purpose is training ML / AI / LLMs',
+    hint:
+      'Flags postings where the work is building/training models (not a normal product or ops role that merely uses AI).',
+  },
+  {
+    id: 'ai_live_tech_interview',
+    label: 'Live AI technical deep-dive screens',
+    hint: 'Flag or skip postings that advertise live AI-proctored technical interviews.',
+  },
+  {
+    id: 'unverifiable_employer',
+    label: 'Unverifiable employer',
+    hint: 'Flag employers with no clear web presence or identity.',
+  },
+];
+
+export const SHELL_EMPLOYER_SKIP_TRIGGER =
+  'Employer appears thin, brand-new, or otherwise unverifiable (shell / scam heuristic)';
+
+/** Category skip triggers injected when the matching preference toggle is on. */
+export const SKIP_CATEGORY_TRIGGERS: Record<SkipCategoryId, string> = {
+  ml_training:
+    'Role\'s main purpose is training ML / AI / LLM models rather than a traditional applied product or ops job',
+  ai_live_tech_interview:
+    'Screening process includes a live AI technical deep-dive interview',
+  unverifiable_employer:
+    'Employer identity is thin, unverifiable, or reads like a shell company',
+};

@@ -7,6 +7,7 @@ import type {
   ExtractSkillsSuccessData,
   GetPageTextSuccessData,
   OpenSidePanelRequest,
+  ProposeConfigFromDocsSuccessData,
 } from '../types/messages';
 import {
   isExtensionFailure,
@@ -46,6 +47,17 @@ export function analyzeJd(
   req: Omit<AnalyzeJdRequest, 'type'>
 ): Promise<ExtensionResponse<AnalyzeJdSuccessData>> {
   return sendMessage({ type: 'ANALYZE_JD', ...req });
+}
+
+export function proposeConfigFromDocs(req: {
+  documentText: string;
+  truncated?: boolean;
+}): Promise<ExtensionResponse<ProposeConfigFromDocsSuccessData>> {
+  return sendMessage({
+    type: 'PROPOSE_CONFIG_FROM_DOCS',
+    documentText: req.documentText,
+    truncated: req.truncated,
+  });
 }
 
 export function openSidePanel(

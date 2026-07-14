@@ -1,5 +1,16 @@
-import type { Config, DeterministicGeo, WorkHistoryEntry } from '../types/domain';
+import type {
+  Config,
+  DeterministicGeo,
+  Preferences,
+  SkillClaim,
+  WorkHistoryEntry,
+} from '../types/domain';
+import { DEFAULT_PREFERENCES } from '../types/domain';
 import { effectiveSkipTriggers } from './storage';
+import {
+  EMPLOYMENT_PRIORITY_OPTIONS,
+  SKIP_CATEGORY_OPTIONS,
+} from './settingsOptions';
 
 export const EXTRACTION_SYSTEM = `You extract a professional skills inventory from a candidate's work history.
 
@@ -57,13 +68,20 @@ Output shape:
   "apply": { "verdict": "yes"|"maybe"|"no", "rationale": string }
 }
 
-Matching logic (follow exactly; the candidate's held skills are ground truth):
-1. A requirement offering alternatives ("X or Y or Z") is satisfied if the candidate holds ANY one of them -> match.
+Evaluation order (follow exactly):
+1. Hard gates first (blocked employers, clearance policy, employment floors, enabled skip categories, scam/shell/PERM triggers). On a clear hard-gate hit → Apply "no", add dealbreaker and/or skipFlag, and do not score Fit above Unlikely (60).
+2. Skill honesty: treat standing "held" as ground truth for matches; "ramp" as partial with honest framing (not a full match); "never_claim" as mismatch if the posting requires that skill. Prefer JD deliverables over job titles. Preferred qualifications are never dealbreakers.
+3. Soft preferences (remote preference, structured-work preference, pipeline load / pay oddity notes) adjust Fit and Apply rationale — they do not alone force Apply "no" unless a hard gate also fires.
+4. Then write skillMatches, Fit, Apply, declutteredJD.
+
+Matching logic (candidate skillClaims / held skills are ground truth):
+1. A requirement offering alternatives ("X or Y or Z") is satisfied if the candidate HOLDS ANY one of them -> match.
 2. A GENERIC requirement ("experience with front-end JavaScript frameworks") is satisfied by ANY specific framework the candidate holds. Angular counts for "front-end frameworks" -> match.
 3. A requirement naming a SPECIFIC technology the candidate does not hold, stated as a hard threshold ("8+ years of React required"), is a mismatch. If phrased as mandatory, also put it in dealbreakers. A satisfied generic line elsewhere does NOT rescue a specific unmet hard requirement.
-4. Never treat holding framework A as holding framework B. Angular experience is not React experience. Only credit skills that appear in the candidate profile (proficiencies or extracted skills). Deficiencies are explicit gaps.
+4. Never treat holding framework A as holding framework B. Angular experience is not React experience. Credit only "held" skills (skillClaims standing held, and any legacy extracted skills treated as held). Ramp = partial. Never-claim / known gaps = mismatch when required.
 5. Every match/partial/mismatch must quote the exact posting line in "evidence" and give a confidence. Put JobLens analysis in "reason", never in "evidence".
 6. Compare the posting's stated education requirements against the candidate's highest education level. If the posting requires a degree level the candidate does not hold (and no equivalent is listed), treat it as a mismatch; if it is a hard gate, also put it in dealbreakers.
+7. Global false-negative reminders: preferred ≠ required; title ≠ deliverables; unfamiliar domain alone is not a dealbreaker when skills match.
 
 Dealbreakers:
 - "requirement" must state the FAILED / unmet condition (logically inverted), not the desired criterion.
@@ -73,16 +91,41 @@ Dealbreakers:
 - "reason" = your analysis. "evidence" = verbatim quote from the posting.
 
 Geography:
-- onsite/hybrid: eligible if the work location is within radius of ANY of the candidate's locations; otherwise excluded; "unclear" if no location is stated.
-- remote: if the posting restricts residency to regions/states/countries, it is eligible only when at least one is in the candidate's work-eligible regions; if it restricts to regions NOT in that list -> excluded. Remote with no stated restriction -> eligible.
+- Empty-list semantics (follow exactly):
+  - If remoteOnly is true: onsite and hybrid are hard gates → dealbreaker and Apply "no". Remote roles proceed with residency rules. Empty commute locations are valid when remoteOnly is set.
+  - If the candidate's onsite/hybrid locations list is empty / "(none)" and remoteOnly is false: NEVER mark onsite or hybrid geo as "eligible". Use "unclear" and say commute locations are not configured. Do not invent eligibility. Do not add an onsite commute dealbreaker solely because locations are unset.
+  - If work-eligible regions is empty / "(none)": treat that as NO residency filter — all remote residency is OK. Do not exclude a remote role for region mismatch against an empty list. Remote with no stated restriction remains eligible.
+  - If held skills are "(none)" (no skillClaims held / proficiencies / extracted skills): do not invent skill matches. Prefer status mismatch/partial only where the posting states concrete skills; Fit should stay conservative (Possible fit 75 or Unlikely 60) unless the posting is essentially skill-light. Say the profile has no held skills in Fit rationale when relevant.
+- onsite/hybrid (when locations ARE configured and remoteOnly is false): eligible if the work location is within radius of ANY of the candidate's locations; otherwise excluded; "unclear" if no posting location is stated.
+- remote (when regions ARE configured): if the posting restricts residency to regions/states/countries, it is eligible only when at least one is in the candidate's work-eligible regions; if it restricts to regions NOT in that list -> excluded. Remote with no stated restriction -> eligible.
+- Apply remotePreference as a soft Fit weight (prefer_remote boosts remote-eligible roles; prefer_onsite boosts onsite/hybrid when eligible); never make remotePreference alone force Apply "no". remoteOnly is the hard gate for skipping onsite/hybrid.
+- When requireRelocationSubsidyOutsideMetros is true and the posting requires relocation outside the candidate's metro/ZIP radii without subsidy language, flag as a soft concern in Fit rationale (hard dealbreaker only if wording clearly makes relocation mandatory with no support and prefer_onsite/gates demand it).
 - Name the specific constraint and which candidate location/region it was checked against in "reason".
 - When a GEO_HINT block is provided (deterministic ZIP distance), prefer its verdict/reason for onsite/hybrid when a posting ZIP was resolved. Still set workModel correctly. For remote roles, ignore GEO_HINT and apply residency rules.
+- PROFILE_EMPTY_HINTS (when present in the user message) reinforce the empty-list rules above; follow them.
+
+Clearance:
+- clearancePolicy "ignore": do not treat clearance language as a gate.
+- "flag": if clearance (or preferred clearance when clearanceIncludePreferred) appears, add a skipFlag / note; Apply maybe unless other hard gates fire.
+- "skip": clearance language matching the policy → dealbreaker and Apply "no". If clearanceSkipUntil is set and today is before that date, treat required clearance as a skip gate; after that date follow policy normally for "able to obtain" language only if Include preferred is on.
+Employment:
+- Respect employmentPriority order and minContractMonths when stated (short contracts below the floor → Apply "no" or dealbreaker when clearly stated).
+
+Compensation:
+- compensationMode "suspend_floors" (Ignore listed pay): do not gate on min/max dollars.
+- "use_floors" (Skip jobs outside my min–max): if pay is clearly outside compensationMinUsd / compensationMaxUsd when those are set, treat as dealbreaker / Apply "no".
+- flagSuspiciousComp: if pay looks absurdly high or low vs typical market for the role, note in Fit/Apply rationale only (no live market tool).
+
+Soft signals:
+- preferStructuredWork: lightly boost Fit when JD language is structured / high-accountability; never hard-skip the inverse.
+- pipelineLoad (how full the seeker's application pipeline is): mention only in Apply rationale as effort context (light/moderate/heavy); do not change Apply verdict from load alone.
+- Availability (targetStartDate, availableImmediately, noticePeriodWeeks): if posting start timing clearly conflicts, note in Fit/Apply rationale.
 
 skipFlags: for each provided skip trigger, flag it only if the posting genuinely matches, quoting the line in "evidence".
 
 Fit (locked label↔score pairs — use exactly these):
 - Perfect fit = 100, Excellent fit = 95, Good fit = 85, Possible fit = 75, Unlikely fit = 60, Poor fit = 0
-Weigh: skill match overall, location/commute/remote eligibility, pay vs signals in profile if any, PERM/skip triggers and authorization language, dealbreakers, and scam/shell postingSmell. Hard geographic or requirement dealbreakers should not land above Unlikely (60). Scam/shell signals → Poor (0).
+Weigh: skill match overall, location/remote preference, pay (when floors active), PERM/skip triggers and authorization language, dealbreakers, soft signals, and scam/shell postingSmell. Hard geographic or requirement dealbreakers should not land above Unlikely (60). Scam/shell signals → Poor (0).
 
 Apply?:
 - "yes" — all hard requirements are met (even if the role is not ideal).
@@ -91,6 +134,10 @@ Apply?:
 Keep "rationale" short.
 
 declutteredJD: rewrite the posting compressed and skimmable. Operative qualifications first (Required, then Preferred), then core responsibilities. Remove marketing copy, HR/PR platitudes, awards and accolades, and boilerplate. Keep at most a one-line culture note, and only if material. Do not invent anything; use only what the posting states.`;
+
+function preferencesPayload(profile: Config): Preferences {
+  return profile.preferences ?? DEFAULT_PREFERENCES;
+}
 
 export type BuildAnalysisUserArgs = {
   profile: Config;
@@ -106,25 +153,111 @@ export function buildAnalysisUser({
   geoHint = null,
 }: BuildAnalysisUserArgs): string {
   const p = profile;
+  const prefs = preferencesPayload(p);
+  const claims: SkillClaim[] =
+    p.skillClaims.length > 0
+      ? p.skillClaims
+      : p.proficiencies.map((skill) => ({
+          skill,
+          standing: 'held' as const,
+        }));
+
+  const held = claims.filter((c) => c.standing === 'held');
+  const ramp = claims.filter((c) => c.standing === 'ramp');
+  const neverClaim = claims.filter((c) => c.standing === 'never_claim');
+
+  const formatClaim = (c: SkillClaim): string => {
+    const bits = [c.skill];
+    if (c.years != null) bits.push(`~${c.years}y`);
+    if (c.lastUsed) bits.push(`last ${c.lastUsed}`);
+    if (c.scopeNote) bits.push(c.scopeNote);
+    if (c.confidence) bits.push(c.confidence);
+    return bits.join(', ');
+  };
+
   const extracted = p.extractedSkills
     .map((s) => `${s.skill} (~${s.years}y, ${s.confidence})`)
     .join('; ');
   const locs = p.locations.map((l) => `${l.zip} within ${l.radiusMiles} mi`).join('; ');
   const skipTriggers = effectiveSkipTriggers(p);
 
+  const employmentLabels = prefs.employmentPriority
+    .map((id) => EMPLOYMENT_PRIORITY_OPTIONS.find((o) => o.id === id)?.label || id)
+    .join(' > ');
+
+  const enabledSkipCats = SKIP_CATEGORY_OPTIONS.filter(
+    (o) => prefs.roleSkipCategories[o.id]
+  ).map((o) => o.label);
+
   const geoBlock = geoHint
     ? `\nGEO_HINT (deterministic ZIP distance; prefer for onsite/hybrid):\n${JSON.stringify(geoHint, null, 2)}\n`
     : '';
 
+  const preferencesBlock = {
+    remotePreference: prefs.remotePreference,
+    remoteOnly: prefs.remoteOnly,
+    requireRelocationSubsidyOutsideMetros: prefs.requireRelocationSubsidyOutsideMetros,
+    employmentPriority: prefs.employmentPriority,
+    employmentPriorityLabels: employmentLabels || null,
+    minContractMonths: prefs.minContractMonths,
+    clearancePolicy: prefs.clearancePolicy,
+    clearanceIncludePreferred: prefs.clearanceIncludePreferred,
+    clearanceSkipUntil: prefs.clearanceSkipUntil || null,
+    blockedEmployers: prefs.blockedEmployers,
+    roleSkipCategoriesEnabled: enabledSkipCats,
+    flagShellEmployers: prefs.flagShellEmployers,
+    flagPermNotices: prefs.flagPermNotices,
+    compensationMode: prefs.compensationMode,
+    compensationMinUsd: prefs.compensationMinUsd,
+    compensationMaxUsd: prefs.compensationMaxUsd,
+    flagSuspiciousComp: prefs.flagSuspiciousComp,
+    preferStructuredWork: prefs.preferStructuredWork,
+    pipelineLoad: prefs.pipelineLoad,
+    targetStartDate: prefs.targetStartDate || null,
+    availableImmediately: prefs.availableImmediately,
+    noticePeriodWeeks: prefs.noticePeriodWeeks,
+    workAuthorizationNote: p.workAuthorizationNote || null,
+  };
+
+  const emptyHints: string[] = [];
+  if (prefs.remoteOnly) {
+    emptyHints.push(
+      'remoteOnly: onsite/hybrid are hard gates (dealbreaker + Apply no); empty commute locations are OK'
+    );
+  } else if (!locs) {
+    emptyHints.push(
+      'locations empty: never mark onsite/hybrid geo eligible; use unclear; do not invent commute eligibility or an onsite dealbreaker solely from unset locations'
+    );
+  }
+  if (p.workEligibleRegions.length === 0) {
+    emptyHints.push(
+      'work-eligible regions empty: no residency filter — do not exclude remote roles for region mismatch'
+    );
+  }
+  if (held.length === 0 && !p.proficiencies.length) {
+    emptyHints.push(
+      'held skills empty: do not invent skill matches; keep Fit conservative (Possible/Unlikely) unless the posting is skill-light'
+    );
+  }
+  const emptyHintsBlock =
+    emptyHints.length > 0
+      ? `\nPROFILE_EMPTY_HINTS\n${emptyHints.map((h, i) => `  ${i + 1}. ${h}`).join('\n')}\n`
+      : '';
+
   return `CANDIDATE PROFILE
 Education: ${p.education || '(not set)'}
-Proficiencies (held, strong): ${p.proficiencies.join(', ') || '(none listed)'}
-Extracted skills (held, reviewed): ${extracted || '(none)'}
-Known gaps: ${p.deficiencies.join(', ') || '(none listed)'}
+Work authorization note: ${p.workAuthorizationNote || '(none)'}
+Held skills: ${held.map(formatClaim).join('; ') || p.proficiencies.join(', ') || '(none)'}
+Ramp skills (partial only): ${ramp.map(formatClaim).join('; ') || '(none)'}
+Never-claim skills: ${neverClaim.map(formatClaim).join('; ') || '(none)'}
+${extracted ? `Legacy extracted skills (treat as held if not already listed): ${extracted}\n` : ''}Known gaps: ${p.deficiencies.join(', ') || '(none listed)'}
 Onsite/hybrid locations: ${locs || '(none)'}
 Remote work-eligible regions: ${p.workEligibleRegions.join(', ') || '(none)'}
 Skip triggers to check:
 ${skipTriggers.map((t, i) => `  ${i + 1}. ${t}`).join('\n') || '  (none)'}
+${emptyHintsBlock}
+PREFERENCES
+${JSON.stringify(preferencesBlock, null, 2)}
 ${geoBlock}
 JOB POSTING
 URL: ${url}
@@ -134,3 +267,49 @@ ${pageText}
 
 Return the analysis JSON.`;
 }
+
+export const CONFIG_PROPOSE_SYSTEM = `You map resumes, notes, and job-search instructions into JobLens configuration proposals.
+
+Return a bare JSON object, no prose, no code fences:
+{
+  "summary": string,
+  "changes": [
+    {
+      "id": string,
+      "path": string,
+      "label": string,
+      "rationale": string,
+      "value": unknown
+    }
+  ]
+}
+
+Rules:
+- Only propose paths from this allowlist: education, workAuthorizationNote, locations, workEligibleRegions, skillClaims, deficiencies, skipTriggers, workHistory, preferences.remoteOnly, preferences.remotePreference, preferences.requireRelocationSubsidyOutsideMetros, preferences.employmentPriority, preferences.minContractMonths, preferences.clearancePolicy, preferences.clearanceIncludePreferred, preferences.clearanceSkipUntil, preferences.blockedEmployers, preferences.roleSkipCategories, preferences.flagShellEmployers, preferences.flagPermNotices, preferences.compensationMode, preferences.compensationMinUsd, preferences.compensationMaxUsd, preferences.flagSuspiciousComp, preferences.preferStructuredWork, preferences.pipelineLoad, preferences.targetStartDate, preferences.availableImmediately, preferences.noticePeriodWeeks.
+- Never propose apiKey, model, theme, bookmarks, roleFamilies, or extractedSkills.
+- Never invent ZIP codes. Only include locations when the text clearly states a postal code or unambiguous home metro with a real US ZIP.
+- skillClaims: array of { skill, standing: "held"|"ramp"|"never_claim", years?, lastUsed?, scopeNote?, confidence? }. Prefer held only when evidenced; use ramp/never_claim when the seeker says so. This is the single skills list.
+- workHistory entries: { org, title, start, end, description }. Stay conservative.
+- employmentPriority ids (ordered): permanent | contract_to_hire | long_contract | short_contract | part_time.
+- remoteOnly: true only when the seeker clearly wants remote-only / will not do onsite or hybrid.
+- Do not invent salary floors or compensation min/max unless explicitly stated.
+- Each change needs a stable unique id, a short human label, and a one-line rationale.
+- Prefer fewer high-confidence changes over speculative ones. Skip fields already matching CURRENT_CONFIG.
+- Array values should be the proposed items to MERGE (not a full wipe), except employmentPriority which is the full ordered list when proposed.`;
+
+export function buildConfigProposeUser(args: {
+  documentText: string;
+  truncated: boolean;
+  currentConfigJson: string;
+}): string {
+  return `CURRENT_CONFIG (apiKey omitted):
+${args.currentConfigJson}
+
+DOCUMENTS${args.truncated ? ' (truncated for length)' : ''}:
+---
+${args.documentText}
+---
+
+Return the proposal JSON.`;
+}
+

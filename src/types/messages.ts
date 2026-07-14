@@ -31,12 +31,22 @@ export const OpenSidePanelRequestSchema = z.object({
 });
 export type OpenSidePanelRequest = z.infer<typeof OpenSidePanelRequestSchema>;
 
+export const ProposeConfigFromDocsRequestSchema = z.object({
+  type: z.literal('PROPOSE_CONFIG_FROM_DOCS'),
+  documentText: z.string().min(1),
+  truncated: z.boolean().optional(),
+});
+export type ProposeConfigFromDocsRequest = z.infer<
+  typeof ProposeConfigFromDocsRequestSchema
+>;
+
 export const ExtensionRequestSchema = z.discriminatedUnion('type', [
   ExtractSkillsRequestSchema,
   AnalyzeJdRequestSchema,
   RunScanRequestSchema,
   GetPageTextRequestSchema,
   OpenSidePanelRequestSchema,
+  ProposeConfigFromDocsRequestSchema,
 ]);
 export type ExtensionRequest = z.infer<typeof ExtensionRequestSchema>;
 
@@ -48,6 +58,16 @@ export type GetPageTextSuccessData = {
   boardId: string;
   boardName: string;
   title: string;
+};
+export type ProposeConfigFromDocsSuccessData = {
+  summary: string;
+  changes: Array<{
+    id: string;
+    path: string;
+    label: string;
+    rationale: string;
+    value?: unknown;
+  }>;
 };
 
 export type ExtensionSuccess<T> = { ok: true; data: T };

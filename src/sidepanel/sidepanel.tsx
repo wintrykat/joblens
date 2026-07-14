@@ -4,7 +4,7 @@ import { boardDisplayNames } from '../lib/boards';
 import { analysisToJsonString } from '../lib/jsonExport';
 import { analysisToMarkdown } from '../lib/markdown';
 import { analyzeJd, getPageTextFromTab } from '../lib/messaging';
-import { addBookmark, getConfig, isBookmarked } from '../lib/storage';
+import { addBookmark, assessProfileCompleteness, getConfig, hasGeoIntent, isBookmarked } from '../lib/storage';
 import { watchThemeFromConfig } from '../lib/theme';
 import type { Analysis, PanelUiState } from '../types/domain';
 import { TriagePanel } from '../ui/TriagePanel';
@@ -25,6 +25,27 @@ function SidePanelApp(): JSX.Element {
   const [copied, setCopied] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
   const [page, setPage] = useState<PageMeta | null>(null);
+  const [profileWarning, setProfileWarning] = useState('');
+  const [profileWarningRequired, setProfileWarningRequired] = useState(false);
+
+  const refreshProfileWarning = useCallback(async (): Promise<void> => {
+    const cfg = await getConfig();
+    const c = assessProfileCompleteness(cfg);
+    setProfileWarning(c.message);
+    setProfileWarningRequired(c.incomplete);
+  }, []);
+
+  useEffect(() => {
+    void refreshProfileWarning();
+    const onChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string
+    ): void => {
+      if (area === 'local' && changes.config) void refreshProfileWarning();
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, [refreshProfileWarning]);
 
   const runScan = useCallback(async (): Promise<void> => {
     setState('loading');
@@ -33,9 +54,19 @@ function SidePanelApp(): JSX.Element {
     setCopiedJson(false);
 
     const cfg = await getConfig();
+    const completeness = assessProfileCompleteness(cfg);
+    setProfileWarning(completeness.message);
+    setProfileWarningRequired(completeness.incomplete);
     if (!cfg.apiKey) {
       setState('error');
       setError('No API key set. Open Options below and add one.');
+      return;
+    }
+    if (!hasGeoIntent(cfg)) {
+      setState('error');
+      setError(
+        'Set geography in Options first: add a ZIP, remote regions, or turn on Remote only.'
+      );
       return;
     }
 
@@ -166,10 +197,13 @@ function SidePanelApp(): JSX.Element {
       saved={saved}
       copied={copied}
       copiedJson={copiedJson}
+      profileWarning={profileWarning}
+      profileWarningRequired={profileWarningRequired}
       onScan={() => void runScan()}
       onBookmark={() => void onBookmark()}
       onCopyMarkdown={() => void onCopy()}
       onCopyJson={() => void onCopyJson()}
+      onOpenOptions={() => void chrome.runtime.openOptionsPage()}
       footer={
         <div className="foot">
           <button type="button" onClick={() => void chrome.runtime.openOptionsPage()}>

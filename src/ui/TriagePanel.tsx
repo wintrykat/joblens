@@ -11,11 +11,16 @@ export type TriagePanelProps = {
   copiedJson?: boolean;
   /** When idle, show a primary Scan CTA */
   showScanCta?: boolean;
+  /** Non-blocking note when profile skills/geo need attention */
+  profileWarning?: string;
+  /** When true, banner is required-geo (stronger); false = soft skills note */
+  profileWarningRequired?: boolean;
   footer?: JSX.Element | null;
   onScan: () => void;
   onBookmark: () => void;
   onCopyMarkdown: () => void;
   onCopyJson: () => void;
+  onOpenOptions?: () => void;
 };
 
 function fitBadgeClass(label: FitLabel): string {
@@ -58,11 +63,14 @@ export function TriagePanel({
   copied = false,
   copiedJson = false,
   showScanCta = true,
+  profileWarning = '',
+  profileWarningRequired = false,
   footer = null,
   onScan,
   onBookmark,
   onCopyMarkdown,
   onCopyJson,
+  onOpenOptions,
 }: TriagePanelProps): JSX.Element {
   const m = analysis?.masthead;
   const geo = analysis?.geo;
@@ -71,12 +79,28 @@ export function TriagePanel({
   const geoClass =
     geo?.verdict === 'eligible' ? 'b-ok' : geo?.verdict === 'excluded' ? 'b-no' : 'b-mid';
 
+  const warningBanner = profileWarning ? (
+    <div
+      className={`profile-warn${profileWarningRequired ? ' profile-warn-required' : ''}`}
+      role="status"
+    >
+      <p>{profileWarning}</p>
+      {onOpenOptions ? (
+        <button type="button" className="linkish" onClick={onOpenOptions}>
+          Open Options
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
   return (
     <div className="panel">
       <div className="head">
         <h1>JobLens{boardName ? ` · ${boardName}` : ''}</h1>
       </div>
       <div className="body">
+        {warningBanner}
+
         {state === 'idle' && showScanCta && (
           <div className="idle">
             <p className="hint">

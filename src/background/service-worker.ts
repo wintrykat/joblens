@@ -6,22 +6,31 @@ import {
   buildExtractionUser,
   ANALYSIS_SYSTEM,
   buildAnalysisUser,
+  CONFIG_PROPOSE_SYSTEM,
+  buildConfigProposeUser,
 } from '../lib/prompts';
 import { applyDeterministicGeo, computeDeterministicGeo } from '../lib/geo';
 import { applyRatingFloors } from '../lib/ratings';
 import {
+  parseConfigProposal,
+  sanitizeConfigForPropose,
+} from '../lib/docImport';
+import {
   AnalyzeJdRequestSchema,
   ExtractSkillsRequestSchema,
   OpenSidePanelRequestSchema,
+  ProposeConfigFromDocsRequestSchema,
   parseAnalysisPayload,
   parseExtractedSkills,
   type AnalyzeJdSuccessData,
   type ExtractSkillsSuccessData,
+  type ProposeConfigFromDocsSuccessData,
 } from '../types/messages';
 
 const BackgroundRequestSchema = z.discriminatedUnion('type', [
   ExtractSkillsRequestSchema,
   AnalyzeJdRequestSchema,
+  ProposeConfigFromDocsRequestSchema,
 ]);
 
 void chrome.sidePanel
@@ -39,7 +48,6 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
       return false;
     }
     const startScan = openReq.data.startScan !== false;
-    // Call open() synchronously so the content-script user gesture is preserved.
     try {
       if (startScan) {
         void chrome.storage.session.set({ pendingScan: true, pendingScanTabId: tabId });
@@ -69,7 +77,9 @@ chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
 
 async function handle(
   raw: unknown
-): Promise<ExtractSkillsSuccessData | AnalyzeJdSuccessData> {
+): Promise<
+  ExtractSkillsSuccessData | AnalyzeJdSuccessData | ProposeConfigFromDocsSuccessData
+> {
   const parsed = BackgroundRequestSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(`Unknown or invalid message: ${parsed.error.message}`);
@@ -78,8 +88,6 @@ async function handle(
   const cfg = await getConfig();
 
   if (msg.type === 'EXTRACT_SKILLS') {
-    // Sonnet 5 adaptive thinking defaults to high effort and counts against
-    // max_tokens — 2048 was mostly consumed by thinking, truncating the JSON.
     const text = await callClaude({
       apiKey: cfg.apiKey,
       model: cfg.model,
@@ -90,6 +98,23 @@ async function handle(
     });
     const json = parseJsonResponse(text);
     return { skills: parseExtractedSkills(json) };
+  }
+
+  if (msg.type === 'PROPOSE_CONFIG_FROM_DOCS') {
+    const text = await callClaude({
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+      system: CONFIG_PROPOSE_SYSTEM,
+      user: buildConfigProposeUser({
+        documentText: msg.documentText,
+        truncated: Boolean(msg.truncated),
+        currentConfigJson: JSON.stringify(sanitizeConfigForPropose(cfg), null, 2),
+      }),
+      maxTokens: 12288,
+      thinking: 'disabled',
+    });
+    const proposal = parseConfigProposal(parseJsonResponse(text));
+    return proposal;
   }
 
   const geoHint = computeDeterministicGeo({
@@ -115,6 +140,6 @@ async function handle(
     locations: cfg.locations,
     pageText: msg.pageText || '',
   });
-  analysis = applyRatingFloors(analysis);
+  analysis = applyRatingFloors(analysis, cfg);
   return { analysis };
 }
