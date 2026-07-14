@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+*.pem
+*.crx
+.DS_Store
+*.local
+.env
+.env.*
+!.env.example
+.memory/
+
+# Local CRX signing key — keep README only
+keys/**
+!keys/README.md
