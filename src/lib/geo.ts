@@ -27,6 +27,45 @@ const CITY_COORDS: ReadonlyArray<{ pattern: RegExp; label: string; coord: readon
 const LOCATION_CONTEXT_RE =
   /(?:location|located|based|office|onsite|on-site|hybrid|headquarters|hq|workplace|work\s*from)\b[^.\n]{0,120}/gi;
 
+/** Approximate state centroids when a City, ST header is present but the city is unknown. */
+const STATE_COORDS: ReadonlyArray<{ code: string; label: string; coord: readonly [number, number] }> = [
+  { code: 'WA', label: 'Washington State', coord: [47.4009, -121.4905] },
+  { code: 'OR', label: 'Oregon', coord: [43.8041, -120.5542] },
+  { code: 'CA', label: 'California', coord: [36.7783, -119.4179] },
+  { code: 'TX', label: 'Texas', coord: [31.9686, -99.9018] },
+  { code: 'NY', label: 'New York State', coord: [42.1657, -74.9481] },
+  { code: 'IL', label: 'Illinois', coord: [40.3495, -88.9861] },
+  { code: 'PA', label: 'Pennsylvania', coord: [40.5908, -77.2098] },
+  { code: 'FL', label: 'Florida', coord: [27.7663, -81.6868] },
+  { code: 'MA', label: 'Massachusetts', coord: [42.2302, -71.5301] },
+  { code: 'CO', label: 'Colorado', coord: [39.0598, -105.3111] },
+  { code: 'GA', label: 'Georgia', coord: [33.0406, -83.6431] },
+];
+
+/**
+ * True when a match at `index` sits in a residency exclusion / negation window
+ * (e.g. "not accepting … in California, Illinois, and New York").
+ */
+export function isNegatedLocationMention(text: string, index: number): boolean {
+  if (index < 0) return false;
+  const start = Math.max(0, index - 160);
+  const window = text.slice(start, index);
+  return (
+    /\bnot\s+accepting\b/i.test(window) ||
+    /\bcannot\s+be\s+considered\b/i.test(window) ||
+    /\bcan\s+not\s+be\s+considered\b/i.test(window) ||
+    /\bare\s+not\s+accepting\b/i.test(window) ||
+    /\bwe\s+are\s+not\b/i.test(window) ||
+    /\bexcluding\b/i.test(window) ||
+    /\bexcept(?:ing)?\b/i.test(window) ||
+    /\boutside\s+of\b/i.test(window) ||
+    /\bother\s+than\b/i.test(window) ||
+    /\bdo\s+not\s+(?:hire|accept|consider)\b/i.test(window) ||
+    /\bwill\s+not\s+(?:hire|accept|consider)\b/i.test(window) ||
+    /\bapplications?\s+from\b/i.test(window)
+  );
+}
+
 export function padZip(zip: string | number | null | undefined): string {
   const digits = String(zip ?? '').replace(/\D/g, '');
   if (digits.length < 5) return digits.padStart(5, '0');
@@ -90,13 +129,57 @@ function extractZipsInLocationContext(text: string): string[] {
   return found;
 }
 
-function extractCityCoord(text: string): { label: string; coord: readonly [number, number] } | null {
+type CityHit = { label: string; coord: readonly [number, number]; index: number };
+
+/**
+ * Earliest non-negated city mention wins (not first entry in CITY_COORDS).
+ * Skips cities that only appear inside exclusion / negation windows.
+ */
+export function extractCityCoord(text: string): { label: string; coord: readonly [number, number] } | null {
+  if (!text) return null;
+  let best: CityHit | null = null;
   for (const city of CITY_COORDS) {
-    if (city.pattern.test(text)) {
-      return { label: city.label, coord: city.coord };
+    const re = new RegExp(city.pattern.source, city.pattern.flags.includes('g') ? city.pattern.flags : `${city.pattern.flags}g`);
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const index = m.index;
+      if (isNegatedLocationMention(text, index)) continue;
+      if (!best || index < best.index) {
+        best = { label: city.label, coord: city.coord, index };
+      }
+      break; // earliest hit for this city pattern is enough
     }
   }
-  return null;
+  return best ? { label: best.label, coord: best.coord } : null;
+}
+
+/** Prefer "City, ST" / "City, State · Remote" header signals when the city itself is unknown. */
+export function extractStateFromLocationHeader(
+  text: string
+): { label: string; coord: readonly [number, number] } | null {
+  if (!text) return null;
+  // Score the earliest non-negated City, ST-style hit in the early header / work-location lines.
+  const header = text.slice(0, 1500);
+  const re =
+    /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*([A-Z]{2})\b(?:\s*[·•|,/-]\s*|\s+)(?:Remote|Hybrid|On[\s-]?site)?/g;
+  let m: RegExpExecArray | null;
+  let best: { code: string; index: number } | null = null;
+  while ((m = re.exec(header))) {
+    const index = m.index;
+    const code = (m[2] || '').toUpperCase();
+    if (!code || isNegatedLocationMention(header, index)) continue;
+    if (!best || index < best.index) best = { code, index };
+  }
+  if (!best) {
+    // Fallback: Work Location: … Remote but … still may list City, ST earlier
+    const loose = header.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*([A-Z]{2})\b/);
+    if (loose?.[2] && !isNegatedLocationMention(header, loose.index ?? 0)) {
+      best = { code: loose[2].toUpperCase(), index: loose.index ?? 0 };
+    }
+  }
+  if (!best) return null;
+  const state = STATE_COORDS.find((s) => s.code === best!.code);
+  return state ? { label: state.label, coord: state.coord } : null;
 }
 
 export type ResolvePostingLocationArgs = {
@@ -129,10 +212,22 @@ export function resolvePostingLocation({
   }
 
   // 2) Named city in stated location or early page text / location context
+  //    (skips cities that only appear in exclusion / negation windows)
   const cityFromStated = extractCityCoord(stated);
   if (cityFromStated) {
     return { kind: 'city', ...cityFromStated };
   }
+
+  // Prefer City, ST header (e.g. Ferndale, WA · Remote) before exclusion-tainted cities.
+  const stateFromHeader = extractStateFromLocationHeader(corpus);
+  if (stateFromHeader) {
+    // If a known city appears *before* the state header hit and is not negated, prefer it.
+    const early = pageText.slice(0, 1200);
+    const cityEarly = extractCityCoord(early);
+    if (cityEarly) return { kind: 'city', ...cityEarly };
+    return { kind: 'city', ...stateFromHeader };
+  }
+
   const locationSnippets = [...corpus.matchAll(LOCATION_CONTEXT_RE)].map((m) => m[0] || '');
   locationSnippets.unshift(pageText.slice(0, 1200));
   for (const snip of locationSnippets) {
@@ -150,7 +245,7 @@ export function resolvePostingLocation({
     if (coord) return { kind: 'zip', zip: pick, coord, label: `ZIP ${pick}` };
   }
 
-  // 4) City anywhere in first 4k of page (last resort before abandoning)
+  // 4) City anywhere in first 4k of page (last resort; still skip negated mentions)
   const cityAnywhere = extractCityCoord(pageText.slice(0, 4000));
   if (cityAnywhere) return { kind: 'city', ...cityAnywhere };
 

@@ -8,7 +8,12 @@ import {
   boardDisplayNames,
 } from '../src/lib/boards';
 import { analysisToJson } from '../src/lib/jsonExport';
-import { computeDeterministicGeo, applyDeterministicGeo, NO_LOCATIONS_GEO_REASON } from '../src/lib/geo';
+import {
+  computeDeterministicGeo,
+  applyDeterministicGeo,
+  NO_LOCATIONS_GEO_REASON,
+  resolvePostingLocation,
+} from '../src/lib/geo';
 import { applyRatingFloors, BLOCKED_EMPLOYER_DEALBREAKER, ONSITE_COMMUTE_DEALBREAKER, REMOTE_ONLY_DEALBREAKER } from '../src/lib/ratings';
 import { buildAnalysisUser, ANALYSIS_SYSTEM } from '../src/lib/prompts';
 import {
@@ -20,7 +25,9 @@ import {
 import {
   allowsOccasionalTravelOutsideRadius,
   detectOnsiteTravelCadence,
+  evaluateRemoteResidency,
   humanizePreflightReason,
+  inferWorkModelHint,
   listingKeyFromHref,
   looksUnrestrictedRemoteResidency,
   mergePreflightResults,
@@ -68,7 +75,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.3.0', 'manifest version');
+assert(manifest.version === '1.4.0', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
@@ -669,6 +676,57 @@ assert(boardDisplayNames().includes('Ashby'), 'names');
     pageText: quarterlyRemote,
   });
   assert(travelHard.verdict === 'hard_skip', 'same JD hard_skip when allowance none');
+
+  const cutsforth = `
+Full Stack Developer
+Cutsforth, LLC
+Ferndale, WA · Remote
+Work Location: Remote but 2 weeks of mandatory training onsite
+Must reside in the United States.
+We are not accepting applicants for remote workers in California, Illinois, and New York at this time. Applications from any of these states can not be considered.
+Job description: build APIs and UIs.
+`.padEnd(600, ' ');
+
+  const loc = resolvePostingLocation({ pageText: cutsforth });
+  assert(loc?.kind === 'city', 'cutsforth resolves a city/state');
+  assert(!/new york/i.test(loc?.label || ''), 'cutsforth location is not NYC from exclusion list');
+  assert(inferWorkModelHint(cutsforth) === 'remote', 'cutsforth remote-primary with short training');
+  assert(detectOnsiteTravelCadence(cutsforth) === 'yearly', 'cutsforth training → yearly cadence');
+
+  const residencyOk = evaluateRemoteResidency(cutsforth, ['TX', 'PA']);
+  assert(residencyOk.verdict === 'clear', 'TX/PA clear vs CA/IL/NY exclude list');
+  const residencyBad = evaluateRemoteResidency(cutsforth, ['NY', 'CA']);
+  assert(residencyBad.verdict === 'hard_skip', 'NY+CA all excluded → hard_skip');
+
+  const cutsLocal = runLocalPreflight({
+    cfg: {
+      ...DEFAULT_CONFIG,
+      locations: [{ zip: '78758', radiusMiles: 25 }],
+      workEligibleRegions: ['TX', 'PA'],
+      preferences: {
+        ...DEFAULT_PREFERENCES,
+        occasionalTravelAllowance: 'quarterly',
+      },
+    },
+    pageText: cutsforth,
+  });
+  assert(cutsLocal.verdict !== 'hard_skip', 'cutsforth local not hard_skip');
+  assert(cutsLocal.flags.includes('residency_ok'), 'cutsforth residency_ok flag');
+
+  const mergedHaikuBad = mergePreflightResults(cutsLocal, {
+    verdict: 'hard_skip',
+    reasons: [
+      'Position located in Madison… wait New York: residency excludes CA/IL/NY and candidate cannot work from PA',
+    ],
+    sources: ['haiku'],
+    flags: ['residency_excluded'],
+    workModelHint: 'remote',
+  });
+  const sanitizedCuts = sanitizeHaikuResidencySkip(mergedHaikuBad, cutsforth, {
+    local: cutsLocal,
+    workEligibleRegions: ['TX', 'PA'],
+  });
+  assert(sanitizedCuts.verdict !== 'hard_skip', 'sanitize demotes Haiku residency hard_skip when TX/PA ok');
 }
 
 console.log(fails ? `\n${fails} FAILURES` : '\nALL PASSED');

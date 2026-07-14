@@ -341,8 +341,11 @@ Geography / residency (critical — follow exactly):
 - Commute locations (when configured) apply to onsite/hybrid only. Do not hard_skip a remote role because the employer's listed city/HQ is outside commute ZIPs.
 - candidateRemoteResidency.regions = where the CANDIDATE may live/work FROM for remote roles. Empty regions list = no residency filter (all remote OK).
 - For remote roles: hard_skip for residency ONLY if the posting EXPLICITLY restricts employee residency/work location to a set of regions/states/countries and NONE of those intersect the candidate's list.
+- INVERTED exclusions: "not accepting applicants from CA, IL, NY" / "cannot be considered" means those states are FORBIDDEN — candidates in other states (e.g. TX, PA) are permitted. Do NOT hard_skip when the candidate's regions are outside the excluded list.
+- Never treat a city/state that appears only inside an exclusion sentence as the job's work location (e.g. "New York" in "not accepting … New York" is not the posting site).
 - Remote + "nationwide", "open to all US", "no [state] residency required", or no residency restriction → clear for residency (even if HQ/city is listed).
-- Listing a city next to Remote (e.g. "Madison, WI · Remote") is NOT a residency restriction by itself.`;
+- Listing a city next to Remote (e.g. "Madison, WI · Remote" or "Ferndale, WA · Remote") is NOT a residency restriction by itself.
+- Short mandatory onsite training (e.g. "2 weeks onsite") with Remote-primary work → Soft under occasionalTravelAllowance when configured; not a commute hard_skip.`;
 
 export function buildPreflightUser(args: {
   hardGatesJson: string;
@@ -387,7 +390,7 @@ export function buildPreflightHardGates(profile: Config): Record<string, unknown
       regions,
       emptyMeansNoFilter: regions.length === 0,
       rule:
-        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency to regions outside this list. Nationwide / no residency required → do not hard_skip. Do not treat employer city/HQ alone as a residency restriction.',
+        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency such that NONE of the candidate regions are allowed. Inverted lists ("not accepting CA, IL, NY") PERMIT other states. Nationwide / no residency required → do not hard_skip. Do not treat cities named only in exclusion sentences as the job site.',
     },
     occasionalTravelRule:
       prefs.occasionalTravelAllowance === 'none'

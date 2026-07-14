@@ -13,8 +13,25 @@ export const PREFLIGHT_TEXT_CAP = 10_000;
 const ONSITE_RE =
   /\b(?:on[\s-]?site|in[\s-]?office|in[\s-]?person|must\s+relocate|relocation\s+required)\b/i;
 const HYBRID_RE = /\bhybrid\b/i;
-const REMOTE_RE =
+const REMOTE_STRONG_RE =
   /\b(?:fully\s+remote|100%\s+remote|remote[\s-]?first|work\s+from\s+home|\bwfh\b|remote\s+ok|remote\s+position|primarily\s+remote)\b/i;
+/** Header / work-location remote (e.g. "Ferndale, WA · Remote", "Remote but 2 weeks…"). */
+const REMOTE_PRIMARY_RE =
+  /(?:^|[·•|,]\s*|\bwork\s*location\s*:\s*|\blocation\s*:\s*)remote\b/i;
+const SHORT_ONSITE_TRAINING_RE =
+  /\b\d+\s*weeks?\s+(?:of\s+)?(?:mandatory\s+)?(?:training\s+)?on[\s-]?site\b|\bon[\s-]?site\s+training\b|\bmandatory\s+training\s+on[\s-]?site\b/i;
+
+export function hasShortOnsiteTraining(pageText: string): boolean {
+  return SHORT_ONSITE_TRAINING_RE.test(pageText);
+}
+
+export function hasRemotePrimarySignal(pageText: string): boolean {
+  return (
+    REMOTE_STRONG_RE.test(pageText) ||
+    REMOTE_PRIMARY_RE.test(pageText) ||
+    /\bremote\s+but\b/i.test(pageText)
+  );
+}
 
 /** Detected onsite travel cadence (most frequent signal wins). */
 export type OnsiteTravelCadence =
@@ -49,10 +66,18 @@ export function detectOnsiteTravelCadence(pageText: string): OnsiteTravelCadence
   const t = pageText;
   let worst: OnsiteTravelCadence = 'unknown';
   const bump = (c: Exclude<OnsiteTravelCadence, 'unknown'>): void => {
-    if (worst === 'unknown' || CADENCE_RANK[c] > CADENCE_RANK[worst as Exclude<OnsiteTravelCadence, 'unknown'>]) {
+    if (
+      worst === 'unknown' ||
+      CADENCE_RANK[c] > CADENCE_RANK[worst as Exclude<OnsiteTravelCadence, 'unknown'>]
+    ) {
       worst = c;
     }
   };
+
+  // One-shot / short training stays rare even if "onsite" appears.
+  if (hasShortOnsiteTraining(t)) {
+    bump('yearly');
+  }
 
   if (
     /\bdaily\b/i.test(t) ||
@@ -128,15 +153,194 @@ export function truncateForPreflight(pageText: string, cap = PREFLIGHT_TEXT_CAP)
 }
 
 export function inferWorkModelHint(pageText: string): 'onsite' | 'hybrid' | 'remote' | 'unclear' {
-  const hasRemote = REMOTE_RE.test(pageText);
+  const remotePrimary = hasRemotePrimarySignal(pageText);
   const hasHybrid = HYBRID_RE.test(pageText);
   const hasOnsite = ONSITE_RE.test(pageText);
+  const shortTraining = hasShortOnsiteTraining(pageText);
+
+  // Remote-primary + short onsite training → still remote (travel soft, not commute hybrid).
+  if (remotePrimary && shortTraining && !hasHybrid) return 'remote';
   if (hasHybrid) return 'hybrid';
-  if (hasOnsite && !hasRemote) return 'onsite';
-  if (hasRemote && !hasOnsite) return 'remote';
-  if (hasOnsite && hasRemote) return 'hybrid';
+  if (hasOnsite && !remotePrimary) return 'onsite';
+  if (remotePrimary && !hasOnsite) return 'remote';
+  if (hasOnsite && remotePrimary) return 'hybrid';
   return 'unclear';
 }
+
+const US_STATE_ALIASES: Record<string, string> = {
+  alabama: 'AL',
+  alaska: 'AK',
+  arizona: 'AZ',
+  arkansas: 'AR',
+  california: 'CA',
+  colorado: 'CO',
+  connecticut: 'CT',
+  delaware: 'DE',
+  florida: 'FL',
+  georgia: 'GA',
+  hawaii: 'HI',
+  idaho: 'ID',
+  illinois: 'IL',
+  indiana: 'IN',
+  iowa: 'IA',
+  kansas: 'KS',
+  kentucky: 'KY',
+  louisiana: 'LA',
+  maine: 'ME',
+  maryland: 'MD',
+  massachusetts: 'MA',
+  michigan: 'MI',
+  minnesota: 'MN',
+  mississippi: 'MS',
+  missouri: 'MO',
+  montana: 'MT',
+  nebraska: 'NE',
+  nevada: 'NV',
+  'new hampshire': 'NH',
+  'new jersey': 'NJ',
+  'new mexico': 'NM',
+  'new york': 'NY',
+  'north carolina': 'NC',
+  'north dakota': 'ND',
+  ohio: 'OH',
+  oklahoma: 'OK',
+  oregon: 'OR',
+  pennsylvania: 'PA',
+  'rhode island': 'RI',
+  'south carolina': 'SC',
+  'south dakota': 'SD',
+  tennessee: 'TN',
+  texas: 'TX',
+  utah: 'UT',
+  vermont: 'VT',
+  virginia: 'VA',
+  washington: 'WA',
+  'west virginia': 'WV',
+  wisconsin: 'WI',
+  wyoming: 'WY',
+  'district of columbia': 'DC',
+};
+
+function normalizeRegionToken(raw: string): string {
+  const t = raw.trim().toLowerCase().replace(/\./g, '');
+  if (/^[a-z]{2}$/i.test(t)) return t.toUpperCase();
+  return US_STATE_ALIASES[t] || t.toUpperCase();
+}
+
+function extractStateTokens(chunk: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // Full state names (longest first)
+  const names = Object.keys(US_STATE_ALIASES).sort((a, b) => b.length - a.length);
+  let rest = chunk;
+  for (const name of names) {
+    const re = new RegExp(`\\b${name.replace(/\s+/g, '\\s+')}\\b`, 'i');
+    if (re.test(rest)) {
+      const code = US_STATE_ALIASES[name];
+      if (code && !seen.has(code)) {
+        seen.add(code);
+        out.push(code);
+      }
+      rest = rest.replace(re, ' ');
+    }
+  }
+  for (const m of rest.matchAll(/\b([A-Z]{2})\b/g)) {
+    const code = (m[1] || '').toUpperCase();
+    if (Object.values(US_STATE_ALIASES).includes(code) && !seen.has(code)) {
+      seen.add(code);
+      out.push(code);
+    }
+  }
+  return out;
+}
+
+export type ResidencyEval = {
+  verdict: 'clear' | 'hard_skip' | 'unknown';
+  reason: string;
+  mode: 'exclude' | 'include' | 'none';
+  states: string[];
+};
+
+/**
+ * Local remote-residency gate for inverted exclude lists and include-only lists.
+ * Hard skip only when configured regions are non-empty and all fail the rule.
+ */
+export function evaluateRemoteResidency(
+  pageText: string,
+  workEligibleRegions: readonly string[]
+): ResidencyEval {
+  const regions = workEligibleRegions.map(normalizeRegionToken).filter(Boolean);
+  const t = pageText;
+
+  const excludeMatch = t.match(
+    /(?:not\s+accepting|are\s+not\s+accepting|will\s+not\s+(?:hire|accept|consider)|do\s+not\s+(?:hire|accept|consider)|excluding|cannot\s+be\s+considered|can\s+not\s+be\s+considered)[^.!\n]{0,200}/i
+  );
+  if (excludeMatch?.[0]) {
+    const states = extractStateTokens(excludeMatch[0]);
+    if (states.length) {
+      if (regions.length === 0) {
+        return {
+          verdict: 'unknown',
+          reason: `Posting excludes remote workers in ${states.join(', ')}; no candidate residency regions configured`,
+          mode: 'exclude',
+          states,
+        };
+      }
+      const blocked = regions.every((r) => states.includes(r));
+      if (blocked) {
+        return {
+          verdict: 'hard_skip',
+          reason: `Posting excludes remote workers in ${states.join(', ')}; your regions (${regions.join(', ')}) are all excluded`,
+          mode: 'exclude',
+          states,
+        };
+      }
+      return {
+        verdict: 'clear',
+        reason: `Posting excludes ${states.join(', ')}; your regions (${regions.join(', ')}) are permitted`,
+        mode: 'exclude',
+        states,
+      };
+    }
+  }
+
+  const includeMatch = t.match(
+    /(?:must\s+reside\s+in|candidates?\s+(?:must\s+be\s+)?(?:located|based)\s+in|only\s+(?:hiring|accepting)\s+(?:from|in)|open\s+(?:only\s+)?to\s+(?:candidates\s+in|residents\s+of))[^.!\n]{0,160}/i
+  );
+  if (includeMatch?.[0] && !/\bunited\s+states\b|\bU\.?S\.?\b|\bnationwide\b/i.test(includeMatch[0])) {
+    const states = extractStateTokens(includeMatch[0]);
+    if (states.length) {
+      if (regions.length === 0) {
+        return {
+          verdict: 'unknown',
+          reason: `Posting limits residency to ${states.join(', ')}; no candidate regions configured`,
+          mode: 'include',
+          states,
+        };
+      }
+      const ok = regions.some((r) => states.includes(r));
+      if (!ok) {
+        return {
+          verdict: 'hard_skip',
+          reason: `Posting requires residency in ${states.join(', ')}; your regions (${regions.join(', ')}) do not overlap`,
+          mode: 'include',
+          states,
+        };
+      }
+      return {
+        verdict: 'clear',
+        reason: `Posting allows residency in ${states.join(', ')}; overlaps your regions (${regions.join(', ')})`,
+        mode: 'include',
+        states,
+      };
+    }
+  }
+
+  return { verdict: 'unknown', reason: '', mode: 'none', states: [] };
+}
+
+// Keep legacy name used by looksUnrestrictedRemoteResidency
+const REMOTE_RE = REMOTE_STRONG_RE;
 
 function extractOrgCandidates(pageText: string, title: string, docTitle?: string): string[] {
   const out: string[] = [];
@@ -222,41 +426,60 @@ export function runLocalPreflight(args: {
     );
   }
 
+  const residency = evaluateRemoteResidency(pageText, cfg.workEligibleRegions);
+  if (residency.verdict === 'hard_skip') {
+    return emptyResult('hard_skip', [residency.reason], {
+      workModelHint,
+      flags: ['residency_excluded'],
+    });
+  }
+  if (residency.verdict === 'clear' && residency.reason) {
+    reasons.push(residency.reason);
+  }
+
   const geo = computeDeterministicGeo({
     locations: cfg.locations,
     pageText,
   });
 
+  const cadence = detectOnsiteTravelCadence(pageText);
+  const allowance = cfg.preferences.occasionalTravelAllowance;
+  const remotePrimary =
+    workModelHint === 'remote' || (hasRemotePrimarySignal(pageText) && hasShortOnsiteTraining(pageText));
+
   if (geo?.verdict === 'excluded') {
-    if (workModelHint === 'onsite' || workModelHint === 'hybrid') {
-      const cadence = detectOnsiteTravelCadence(pageText);
-      const allowance = cfg.preferences.occasionalTravelAllowance;
+    // Remote-primary / short training: commute distance is not a hard gate.
+    if (remotePrimary) {
+      if (allowsOccasionalTravelOutsideRadius(allowance, cadence) || hasShortOnsiteTraining(pageText)) {
+        reasons.push(
+          `Remote-primary with light onsite travel (${cadence === 'unknown' ? 'training/occasional' : cadence}): ${geo.reason}`
+        );
+      } else {
+        reasons.push(`Geo distance noted but remote: ${geo.reason}`);
+      }
+    } else if (workModelHint === 'onsite' || workModelHint === 'hybrid') {
       if (allowsOccasionalTravelOutsideRadius(allowance, cadence)) {
         const cadenceLabel = cadence === 'unknown' ? 'unspecified light travel' : cadence;
         return emptyResult(
           'soft',
           [
+            ...reasons,
             `Travel outside radius (${cadenceLabel}) allowed by your setting (up to ${allowance}): ${geo.reason}`,
           ],
           {
             workModelHint,
             geoNote: geo.reason,
-            flags: ['geo_excluded_travel_allowed'],
+            flags: ['geo_excluded_travel_allowed', ...(residency.verdict === 'clear' ? ['residency_ok'] : [])],
           }
         );
       }
-      return emptyResult('hard_skip', [geo.reason], {
+      return emptyResult('hard_skip', [...reasons, geo.reason], {
         workModelHint,
         geoNote: geo.reason,
         flags: ['geo_excluded'],
       });
-    }
-    if (workModelHint === 'remote') {
-      // Commute exclude does not apply to clear remote roles
-      reasons.push(`Geo distance noted but remote: ${geo.reason}`);
     } else {
-      // Ambiguous work model — soft signal only
-      return emptyResult('soft', [`Possible geo miss (work model unclear): ${geo.reason}`], {
+      return emptyResult('soft', [...reasons, `Possible geo miss (work model unclear): ${geo.reason}`], {
         workModelHint,
         geoNote: geo.reason,
         flags: ['geo_excluded_unclear_model'],
@@ -268,17 +491,26 @@ export function runLocalPreflight(args: {
     reasons.push(geo.reason);
   }
 
-  if (!needsSemanticPreflight(cfg) && workModelHint !== 'unclear') {
-    return emptyResult(reasons.length ? 'clear' : 'clear', reasons.length ? reasons : ['No local hard gates hit'], {
-      workModelHint,
-    });
+  const flags =
+    residency.verdict === 'clear' ? (['residency_ok'] as string[]) : ([] as string[]);
+
+  if (!needsSemanticPreflight(cfg) && workModelHint !== 'unclear' && residency.verdict !== 'unknown') {
+    return emptyResult(
+      reasons.some((r) => /travel|training|distance/i.test(r)) ? 'soft' : 'clear',
+      reasons.length ? reasons : ['No local hard gates hit'],
+      { workModelHint, flags }
+    );
   }
 
   if (reasons.length) {
-    return emptyResult('soft', reasons, { workModelHint });
+    return emptyResult(
+      reasons.some((r) => /travel|training|distance|geo/i.test(r)) ? 'soft' : 'clear',
+      reasons,
+      { workModelHint, flags }
+    );
   }
 
-  return emptyResult('unknown', [], { workModelHint });
+  return emptyResult('unknown', [], { workModelHint, flags });
 }
 
 const VERDICT_RANK: Record<PreflightVerdict, number> = {
@@ -401,29 +633,67 @@ function looksResidencyHardSkip(result: PreflightResult): boolean {
 }
 
 /**
- * Demote bogus Haiku residency hard_skips when the JD is clearly nationwide remote.
- * Does not touch local hard_skips (blocked employer, commute onsite, remoteOnly).
+ * Demote bogus Haiku residency hard_skips when local residency is OK, or when
+ * the JD is clearly nationwide remote. Does not touch pure local hard_skips.
  */
 export function sanitizeHaikuResidencySkip(
   result: PreflightResult,
-  pageText: string
+  pageText: string,
+  opts?: { local?: PreflightResult | null; workEligibleRegions?: readonly string[] }
 ): PreflightResult {
   if (result.verdict !== 'hard_skip') return result;
   if (!result.sources.includes('haiku')) return result;
-  // Pure local hard_skip — leave alone
   if (result.sources.length === 1 && result.sources[0] === 'local') return result;
   if (!looksResidencyHardSkip(result)) return result;
-  if (!looksUnrestrictedRemoteResidency(pageText)) return result;
 
-  return {
-    ...result,
-    verdict: 'clear',
-    reasons: [
-      'Remote / nationwide — employer city is not a residency limit',
-      ...result.reasons.map(humanizePreflightReason),
-    ].slice(0, 3),
-    flags: result.flags.filter((f) => !/residency|region/i.test(f)),
-  };
+  const local = opts?.local;
+
+  if (local?.flags.includes('residency_ok')) {
+    return {
+      ...result,
+      verdict: local.verdict === 'soft' ? 'soft' : 'clear',
+      reasons: [
+        ...(local.reasons.length ? local.reasons : ['Residency permitted for your regions']),
+      ].slice(0, 3),
+      flags: Array.from(
+        new Set([...local.flags, ...result.flags.filter((f) => !/residency_excluded|region/i.test(f))])
+      ),
+      sources: Array.from(new Set([...result.sources, 'local'])),
+    };
+  }
+
+  const regions = opts?.workEligibleRegions ?? [];
+  if (regions.length) {
+    const residency = evaluateRemoteResidency(pageText, regions);
+    if (residency.verdict === 'clear') {
+      return {
+        ...result,
+        verdict: local?.verdict === 'soft' ? 'soft' : 'clear',
+        reasons: [residency.reason, ...result.reasons.map(humanizePreflightReason)].slice(0, 3),
+        flags: Array.from(
+          new Set([
+            'residency_ok',
+            ...(local?.flags ?? []),
+            ...result.flags.filter((f) => !/residency_excluded|region/i.test(f)),
+          ])
+        ),
+      };
+    }
+  }
+
+  if (looksUnrestrictedRemoteResidency(pageText)) {
+    return {
+      ...result,
+      verdict: 'clear',
+      reasons: [
+        'Remote / nationwide — employer city is not a residency limit',
+        ...result.reasons.map(humanizePreflightReason),
+      ].slice(0, 3),
+      flags: result.flags.filter((f) => !/residency|region/i.test(f)),
+    };
+  }
+
+  return result;
 }
 
 /** Make preflight reasons readable in the launcher badge. */

@@ -184,7 +184,10 @@ async function handle(
     });
     const haiku = parsePreflightPayload(parseJsonResponse(text));
     const merged = mergePreflightResults(local, haiku);
-    const sanitized = sanitizeHaikuResidencySkip(merged, msg.pageText || '');
+    const sanitized = sanitizeHaikuResidencySkip(merged, msg.pageText || '', {
+      local,
+      workEligibleRegions: cfg.workEligibleRegions,
+    });
     return {
       preflight: {
         ...sanitized,
