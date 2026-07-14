@@ -446,6 +446,10 @@ export type Board = {
   name: string;
   matchPatterns: readonly string[];
   isPostingUrl?: (url: string) => boolean;
+  /** DOM-aware gate for split-pane SPAs where URL alone is not enough. */
+  isScannableJob?: (doc: Document, url: string) => boolean;
+  /** Canonical/bookmark URL when location.href is still a SERP. */
+  resolveJobUrl?: (doc: Document, url: string) => string;
   extractPageText?: (doc?: Document) => string;
   notes?: string;
 };

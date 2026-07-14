@@ -55,7 +55,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.2.0', 'manifest version');
+assert(manifest.version === '1.2.1', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
@@ -64,6 +64,16 @@ const cases: Array<[string, string, boolean]> = [
   ['builtin', 'https://www.builtin.com/job/foo/123', true],
   ['builtin', 'https://www.builtin.com/jobs', false],
   ['ziprecruiter', 'https://www.ziprecruiter.com/jobs/acme-clerk-abc', true],
+  [
+    'ziprecruiter',
+    'https://www.ziprecruiter.com/c/Acme/Job/Full-Stack-Lead/-in-Austin,TX/-j0abc123',
+    true,
+  ],
+  [
+    'ziprecruiter',
+    'https://www.ziprecruiter.com/jobs-search?search=engineer&location=Austin%2C+TX&lk=abc123',
+    true,
+  ],
   ['ziprecruiter', 'https://www.ziprecruiter.com/jobs-search?q=x', false],
   ['indeed', 'https://www.indeed.com/viewjob?jk=abc', true],
   ['indeed', 'https://www.indeed.com/jobs?q=engineer', false],

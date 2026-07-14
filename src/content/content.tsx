@@ -1,4 +1,4 @@
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, type JSX } from 'react';
 import {
   extractPageTextForBoard,
@@ -13,6 +13,8 @@ import {
 import { launcherStyles } from './launcherStyles';
 
 const board = resolveBoard();
+let launcherRoot: Root | null = null;
+let launcherHost: HTMLElement | null = null;
 
 function Launcher(): JSX.Element {
   const onScan = useCallback(() => {
@@ -27,6 +29,7 @@ function Launcher(): JSX.Element {
 }
 
 function mountLauncher(): void {
+  if (launcherHost || document.getElementById('joblens-root')) return;
   const host = document.createElement('div');
   host.id = 'joblens-root';
   document.documentElement.appendChild(host);
@@ -36,14 +39,38 @@ function mountLauncher(): void {
   shadow.appendChild(styleEl);
   const mount = document.createElement('div');
   shadow.appendChild(mount);
-  createRoot(mount).render(<Launcher />);
+  launcherHost = host;
+  launcherRoot = createRoot(mount);
+  launcherRoot.render(<Launcher />);
+}
+
+function unmountLauncher(): void {
+  if (launcherRoot) {
+    launcherRoot.unmount();
+    launcherRoot = null;
+  }
+  launcherHost?.remove();
+  launcherHost = null;
+  document.getElementById('joblens-root')?.remove();
+}
+
+function syncLauncher(): void {
+  if (shouldShowLauncher(board, location.href, document)) {
+    mountLauncher();
+  } else {
+    unmountLauncher();
+  }
 }
 
 function postingRejectReason(): string | null {
-  if (shouldShowLauncher(board)) return null;
+  if (shouldShowLauncher(board, location.href, document)) return null;
   return board
     ? 'Open a job posting page on this site (not a search/list page).'
     : 'Unsupported page.';
+}
+
+function resolvedPageUrl(): string {
+  return board?.resolveJobUrl?.(document, location.href) ?? location.href;
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
@@ -57,7 +84,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     sendResponse({
       ok: true,
       data: {
-        url: location.href,
+        url: resolvedPageUrl(),
         pageText: extractPageTextForBoard(board),
         boardId: board?.id || '',
         boardName: board?.name || '',
@@ -87,6 +114,45 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   return false;
 });
 
-if (shouldShowLauncher(board)) {
-  mountLauncher();
+syncLauncher();
+
+/** Keep launcher in sync on split-pane SPAs (e.g. ZipRecruiter jobs-search). */
+if (board?.isScannableJob) {
+  let lastHref = location.href;
+  const onNav = (): void => {
+    if (location.href === lastHref) {
+      syncLauncher();
+      return;
+    }
+    lastHref = location.href;
+    syncLauncher();
+  };
+
+  const wrapHistory = (method: 'pushState' | 'replaceState'): void => {
+    const original = history[method].bind(history);
+    history[method] = (...args: Parameters<History['pushState']>) => {
+      const result = original(...args);
+      onNav();
+      return result;
+    };
+  };
+  wrapHistory('pushState');
+  wrapHistory('replaceState');
+  window.addEventListener('popstate', onNav);
+
+  const observeTarget =
+    document.querySelector('[data-testid="right-pane"]') ??
+    document.querySelector('[data-testid="job-details-scroll-container"]') ??
+    document.body;
+
+  let debounce: ReturnType<typeof setTimeout> | undefined;
+  const observer = new MutationObserver(() => {
+    clearTimeout(debounce);
+    debounce = setTimeout(onNav, 200);
+  });
+  observer.observe(observeTarget, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
 }

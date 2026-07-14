@@ -42,8 +42,29 @@ export const BOARDS: readonly Board[] = [
     id: 'ziprecruiter',
     name: 'ZipRecruiter',
     matchPatterns: ['*://*.ziprecruiter.com/*'],
-    isPostingUrl: (url) =>
-      /ziprecruiter\.com\/(?:job\/|jobs\/[^/?#]+|c\/job)/i.test(url),
+    isPostingUrl: (url) => {
+      // Standalone posting pages
+      if (/ziprecruiter\.com\/c\/[^/?#]+\/Job\//i.test(url)) return true;
+      if (/ziprecruiter\.com\/job\//i.test(url)) return true;
+      if (/ziprecruiter\.com\/jobs\/[^/?#]+/i.test(url) && !/\/jobs-search/i.test(url))
+        return true;
+      // Split-pane SERP with a selected listing (lk = listing key)
+      try {
+        const u = new URL(url);
+        if (/\/jobs-search/i.test(u.pathname) && u.searchParams.has('lk')) return true;
+      } catch {
+        /* ignore */
+      }
+      return false;
+    },
+    isScannableJob: (doc) => zipDetailLooksLikeJob(doc),
+    resolveJobUrl: (doc, url) => resolveZipJobUrl(doc, url),
+    extractPageText: (doc = document) =>
+      extractBySelectors(doc, [
+        '[data-testid="job-details-scroll-container"]',
+        '[data-testid="right-pane"]',
+      ]),
+    notes: 'Split-pane /jobs-search uses detail pane + optional lk=; hooks reusable for similar boards.',
   },
   {
     id: 'indeed',
@@ -432,11 +453,108 @@ export function resolveBoard(
 
 export function shouldShowLauncher(
   board: Board | null | undefined,
-  href: string = typeof location !== 'undefined' ? location.href : ''
+  href: string = typeof location !== 'undefined' ? location.href : '',
+  doc?: Document
 ): boolean {
   if (!board) return false;
-  if (!board.isPostingUrl) return true;
-  return board.isPostingUrl(href);
+  if (!board.isPostingUrl && !board.isScannableJob) return true;
+  if (board.isPostingUrl?.(href)) return true;
+  if (doc && board.isScannableJob?.(doc, href)) return true;
+  return false;
+}
+
+const ZIP_STANDALONE_JOB_RE = /\/c\/[^/?#]+\/Job\//i;
+
+function zipDetailPane(doc: Document): Element | null {
+  return (
+    doc.querySelector('[data-testid="job-details-scroll-container"]') ??
+    doc.querySelector('[data-testid="right-pane"]')
+  );
+}
+
+function zipDetailLooksLikeJob(doc: Document): boolean {
+  const pane = zipDetailPane(doc);
+  if (!pane) return false;
+  const text = (pane.textContent ?? '').replace(/\s+/g, ' ').trim();
+  if (text.length < 400) return false;
+  const lower = text.toLowerCase();
+  const hasDescription =
+    /job description/i.test(text) ||
+    Boolean(pane.querySelector('#job_description, .job_description, [data-testid*="description"]'));
+  const hasApply =
+    /\bapply\b/i.test(lower) ||
+    Boolean(pane.querySelector('a[href*="apply"], button, [role="button"]'));
+  return hasDescription || hasApply;
+}
+
+function ldJsonNodes(scriptText: string): unknown[] {
+  try {
+    const raw = JSON.parse(scriptText || 'null') as unknown;
+    return Array.isArray(raw) ? raw : [raw];
+  } catch {
+    return [];
+  }
+}
+
+function itemListEntries(node: unknown): unknown[] {
+  if (!node || typeof node !== 'object') return [];
+  const typed = node as { '@type'?: string | string[]; itemListElement?: unknown[] };
+  const types = Array.isArray(typed['@type'])
+    ? typed['@type']
+    : typed['@type']
+      ? [typed['@type']]
+      : [];
+  if (!types.some((t) => String(t).toLowerCase() === 'itemlist')) return [];
+  return typed.itemListElement ?? [];
+}
+
+function entryNameAndUrl(entry: unknown): { name: string; url: string } | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const item = entry as {
+    name?: string;
+    url?: string;
+    item?: { name?: string; url?: string };
+  };
+  const name = (item.name ?? item.item?.name ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const url = item.url ?? item.item?.url;
+  if (!name || !url) return null;
+  return { name, url };
+}
+
+function resolveZipJobUrlFromJsonLd(doc: Document, title: string): string | null {
+  for (const script of Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))) {
+    for (const node of ldJsonNodes(script.textContent || '')) {
+      for (const entry of itemListEntries(node)) {
+        const parsed = entryNameAndUrl(entry);
+        if (parsed && parsed.name === title) return parsed.url;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveZipJobUrl(doc: Document, fallbackUrl: string): string {
+  const pane = zipDetailPane(doc);
+  const title = (pane?.querySelector('h1, h2')?.textContent ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (title) {
+    const fromLd = resolveZipJobUrlFromJsonLd(doc, title);
+    if (fromLd) return fromLd;
+  }
+
+  const scope = pane ?? doc;
+  const near = scope.querySelector<HTMLAnchorElement>('a[href*="/c/"][href*="/Job/"]');
+  if (near?.href && ZIP_STANDALONE_JOB_RE.test(near.href)) return near.href;
+
+  const selected = doc.querySelector(
+    '[aria-selected="true"] a[href*="/c/"][href*="/Job/"], [data-selected="true"] a[href*="/c/"][href*="/Job/"]'
+  ) as HTMLAnchorElement | null;
+  if (selected?.href && ZIP_STANDALONE_JOB_RE.test(selected.href)) return selected.href;
+
+  return fallbackUrl;
 }
 
 export function extractPageTextForBoard(
