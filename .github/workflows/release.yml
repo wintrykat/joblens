@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - package.json
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to release
+        id: gate
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="v${VERSION}"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists — skipping."
+            exit 0
+          fi
+
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            OLD=$(git show HEAD~1:package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+            if [ "$OLD" = "$VERSION" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "package.json version unchanged vs parent ($VERSION) — skipping."
+              exit 0
+            fi
+            echo "Previous version: $OLD → $VERSION"
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install
+        if: steps.gate.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Build and zip
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          npm run build
+          npm run pack:zip
+          test -f "release/joblens-${{ steps.ver.outputs.version }}.zip"
+
+      - name: Write release notes
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          PREV=$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)
+          {
+            echo "## What's changed"
+            echo
+            if [ -n "$PREV" ]; then
+              git log "${PREV}..HEAD" --pretty=format:'- %s' --no-merges
+              echo
+            else
+              git log --pretty=format:'- %s' --no-merges
+              echo
+            fi
+            echo
+            echo "## Install (Load unpacked)"
+            echo
+            echo "Chrome does not allow one-click install from GitHub. Use Developer mode:"
+            echo
+            echo "1. Download \`joblens-${VERSION}.zip\` below and unzip it."
+            echo "2. Open \`chrome://extensions\`, enable **Developer mode**."
+            echo "3. **Load unpacked** → select the unzipped folder (it should contain \`manifest.json\`)."
+            echo
+            echo "There is no auto-update outside the Chrome Web Store — re-download when a new release appears."
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            "release/joblens-${{ steps.ver.outputs.version }}.zip" \
+            --title "JobLens ${{ steps.ver.outputs.version }}" \
+            --notes-file release-notes.md \
+            --latest
