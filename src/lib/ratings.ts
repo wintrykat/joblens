@@ -1,79 +1,56 @@
-import type {
-  Analysis,
-  Config,
-  Dealbreaker,
-  FitRating,
-  FitScore,
-  Preferences,
-} from '../types/domain';
-import {
-  DEFAULT_APPLY,
-  DEFAULT_FIT,
-  DEFAULT_PREFERENCES,
-  FIT_LABEL_BY_SCORE,
-} from '../types/domain';
+/**
+ * Soft rating floors / consistency after model + preference merge.
+ *
+ * Hard gates (dealbreakers, geo exclusion) can only lower Fit/Apply.
+ * Soft prefs alone must not invent a hard Fail. When there is no hard
+ * evidence, optimistic skill/geo evidence may raise a contradictory Poor/No.
+ */
 
+import type { Analysis, ApplyRating, ApplyVerdict, Config, FitRating, FitScore } from '../types/domain';
+import { FIT_LABEL_BY_SCORE } from '../types/domain';
+
+/** Deterministic dealbreaker title when onsite commute exceeds maxCommutingDistance. */
 export const ONSITE_COMMUTE_DEALBREAKER =
-  'Onsite work location not within configured commute radius';
+  'Onsite role exceeds configured max commuting distance';
 
-export const BLOCKED_EMPLOYER_DEALBREAKER = 'Employer is on the configured block list';
+/** Deterministic dealbreaker when preferences.remoteOnly rejects non-remote work. */
+export const REMOTE_ONLY_DEALBREAKER = 'Remote-only preference excludes this work model';
 
-export const REMOTE_ONLY_DEALBREAKER =
-  'Role requires onsite or hybrid work; profile is remote-only';
+/** Deterministic dealbreaker when organization matches preferences.blockedEmployers. */
+export const BLOCKED_EMPLOYER_DEALBREAKER = 'Employer matches blocked-employers list';
 
-const LEGACY_POSITIVE_TITLES: ReadonlyArray<{ match: RegExp; replacement: string }> = [
+/**
+ * Prefer negative language for hard-gate titles. Models often invert the
+ * commute constraint into a positive preference statement.
+ */
+const LEGACY_POSITIVE_TITLES: Array<{ match: RegExp; title: string }> = [
   {
-    match: /^Onsite work location within configured commute radius$/i,
-    replacement: ONSITE_COMMUTE_DEALBREAKER,
+    match: /onsite\s+work\s+location\s+within\s+configured\s+commute\s+radius/i,
+    title: ONSITE_COMMUTE_DEALBREAKER,
   },
   {
-    match: /^Willingness to relocate\/travel to unanticipated U\.?S\.? client sites$/i,
-    replacement: 'Relocation/travel requirements not compatible with configured commute radius',
+    match: /work\s+location\s+within\s+(the\s+)?configured\s+commute/i,
+    title: ONSITE_COMMUTE_DEALBREAKER,
+  },
+  {
+    match: /commute\s+(radius|distance)\s+(is\s+)?(satisfied|within|ok|met)/i,
+    title: ONSITE_COMMUTE_DEALBREAKER,
   },
 ];
 
-export function normalizeDealbreakerTitles(
-  dealbreakers: readonly Dealbreaker[]
-): Dealbreaker[] {
+export function normalizeDealbreakerTitles(dealbreakers: Analysis['dealbreakers']): Analysis['dealbreakers'] {
   return dealbreakers.map((d) => {
-    for (const rule of LEGACY_POSITIVE_TITLES) {
-      if (rule.match.test(d.requirement.trim())) {
-        return { ...d, requirement: rule.replacement };
-      }
-    }
-    return d;
+    const hit = LEGACY_POSITIVE_TITLES.find((r) => r.match.test(d.requirement));
+    return hit ? { ...d, requirement: hit.title } : d;
   });
 }
 
-function capFitAt(fit: FitRating, maxScore: FitScore): FitRating {
-  if (fit.score <= maxScore) return fit;
-  return {
-    label: FIT_LABEL_BY_SCORE[maxScore],
-    score: maxScore,
-    rationale: fit.rationale,
-  };
-}
-
-function looksLikeScam(analysis: Analysis): boolean {
-  if (/scam|shell company|phishing|fraudulent/i.test(analysis.postingSmell || '')) {
-    return true;
-  }
-  return analysis.skipFlags.some((s) =>
-    /shell company|scam|fraud/i.test(`${s.trigger} ${s.evidence}`)
-  );
-}
-
-function prefsOf(cfg?: Config | null): Preferences {
-  return cfg?.preferences ?? DEFAULT_PREFERENCES;
-}
-
-/** Case-insensitive substring match of blocked employer against org name. */
 export function findBlockedEmployerHit(
   organization: string,
-  blocked: readonly string[]
+  blocked: string[] | undefined,
 ): string | null {
   const org = organization.trim().toLowerCase();
-  if (!org) return null;
+  if (!org || !blocked?.length) return null;
   for (const raw of blocked) {
     const needle = raw.trim().toLowerCase();
     if (needle.length >= 2 && org.includes(needle)) return raw.trim();
@@ -81,82 +58,174 @@ export function findBlockedEmployerHit(
   return null;
 }
 
+function prefsOf(cfg?: Config | null) {
+  return cfg?.preferences;
+}
+
+function capFitAt(fit: FitRating, maxScore: FitScore, rationaleExtra: string): FitRating {
+  if (fit.score <= maxScore) return fit;
+  return {
+    label: FIT_LABEL_BY_SCORE[maxScore],
+    score: maxScore,
+    rationale: [fit.rationale, rationaleExtra].filter(Boolean).join(' ').trim(),
+  };
+}
+
+/** Raise Fit when the model was too pessimistic vs observable evidence. */
+function floorFitAt(fit: FitRating, minScore: FitScore, rationaleExtra: string): FitRating {
+  if (fit.score >= minScore) return fit;
+  return {
+    label: FIT_LABEL_BY_SCORE[minScore],
+    score: minScore,
+    rationale: [fit.rationale, rationaleExtra].filter(Boolean).join(' ').trim(),
+  };
+}
+
+export function looksLikeScam(analysis: Analysis): boolean {
+  const smell = analysis.postingSmell.toLowerCase();
+  if (/(scam|shell\s+company|phishing|fraud)/i.test(smell)) return true;
+  return analysis.skipFlags.some((f) => /shell company|scam|fraud/i.test(f.trigger));
+}
+
+type SkillStrength = 'none' | 'good' | 'strong';
+
 /**
- * Enforce Apply?/Fit floors after geo + model analysis so hard disqualifiers
- * cannot be soft-pedaled by the model.
+ * Observable skill evidence for lifting contradictory Poor/No when there is
+ * no hard gate. Ignores soft preference preferences.
+ */
+function skillEvidenceStrength(analysis: Analysis): SkillStrength {
+  const skills = analysis.skillMatches;
+  if (!skills.length) return 'none';
+  let matches = 0;
+  let partials = 0;
+  let mismatches = 0;
+  for (const s of skills) {
+    if (s.status === 'match') matches++;
+    else if (s.status === 'partial') partials++;
+    else if (s.status === 'mismatch') mismatches++;
+  }
+  if (mismatches > 0) return 'none';
+  if (matches >= 3 && skills.length >= 3) return 'strong';
+  if (matches >= 2 && matches >= partials && skills.length >= 2) return 'good';
+  return 'none';
+}
+
+function raiseApply(apply: ApplyRating, min: ApplyVerdict, rationaleExtra: string): ApplyRating {
+  const rank: Record<ApplyVerdict, number> = { no: 0, maybe: 1, yes: 2 };
+  if (rank[apply.verdict] >= rank[min]) return apply;
+  return {
+    verdict: min,
+    rationale: [apply.rationale, rationaleExtra].filter(Boolean).join(' ').trim(),
+  };
+}
+
+/**
+ * Cap Fit/Apply when hard gates fire; lift contradictory Poor/No when they do not.
  */
 export function applyRatingFloors(analysis: Analysis, cfg?: Config | null): Analysis {
-  const dealbreakers = normalizeDealbreakerTitles([...analysis.dealbreakers]);
-  let fit: FitRating = analysis.fit ?? DEFAULT_FIT;
-  let apply = analysis.apply ?? DEFAULT_APPLY;
-  const prefs = prefsOf(cfg);
-
-  const blockedHit = findBlockedEmployerHit(
-    analysis.masthead?.organization || '',
-    prefs.blockedEmployers
-  );
-  if (blockedHit) {
-    const already = dealbreakers.some((d) =>
-      /block list|blocked employer/i.test(d.requirement)
-    );
-    if (!already) {
-      dealbreakers.push({
-        requirement: BLOCKED_EMPLOYER_DEALBREAKER,
-        evidence: analysis.masthead?.organization || blockedHit,
-        reason: `Matched blocked employer "${blockedHit}".`,
-      });
-    }
-  }
-
-  const workModel = analysis.workModel ?? analysis.masthead?.workModel;
-  if (prefs.remoteOnly && (workModel === 'onsite' || workModel === 'hybrid')) {
-    const already = dealbreakers.some((d) => /remote-only/i.test(d.requirement));
-    if (!already) {
-      dealbreakers.push({
-        requirement: REMOTE_ONLY_DEALBREAKER,
-        evidence: String(workModel),
-        reason: 'Profile is configured for remote-only roles.',
-      });
-    }
-  }
-
-  const geoExcluded = analysis.geo?.verdict === 'excluded';
-  const hasDealbreaker = dealbreakers.length > 0;
-  const hardDisqualifier = hasDealbreaker || geoExcluded;
-
-  if (hardDisqualifier) {
-    apply = {
-      verdict: 'no',
-      rationale:
-        apply.rationale?.trim() ||
-        (prefs.remoteOnly && (workModel === 'onsite' || workModel === 'hybrid')
-          ? 'Remote-only profile: onsite/hybrid roles are skipped.'
-          : blockedHit
-            ? `Employer matches block list (${blockedHit}).`
-            : geoExcluded
-              ? 'Location or commute is outside configured eligibility.'
-              : 'One or more hard dealbreakers apply.'),
-    };
-    fit = capFitAt(fit, 60);
-  }
-
-  if (looksLikeScam(analysis)) {
-    fit = {
-      label: 'Poor fit',
-      score: 0,
-      rationale: fit.rationale || 'Posting appears fraudulent or like a shell employer.',
-    };
-    apply = {
-      verdict: 'no',
-      rationale: apply.rationale || 'Clear scam / shell-employer signals.',
-    };
-  }
-
-  // Re-sync label to score after caps.
-  fit = {
-    ...fit,
-    label: FIT_LABEL_BY_SCORE[fit.score],
+  let next: Analysis = {
+    ...analysis,
+    dealbreakers: normalizeDealbreakerTitles(analysis.dealbreakers),
   };
 
-  return { ...analysis, dealbreakers, fit, apply };
+  const prefs = prefsOf(cfg);
+  const wm = next.masthead.workModel;
+  if (prefs?.remoteOnly && (wm === 'onsite' || wm === 'hybrid')) {
+    const already = next.dealbreakers.some((d) => d.requirement === REMOTE_ONLY_DEALBREAKER);
+    if (!already) {
+      next = {
+        ...next,
+        dealbreakers: [
+          ...next.dealbreakers,
+          {
+            requirement: REMOTE_ONLY_DEALBREAKER,
+            evidence: `workModel=${wm}`,
+            reason: 'preferences.remoteOnly is enabled',
+          },
+        ],
+      };
+    }
+  }
+
+  const blockedHit = findBlockedEmployerHit(next.masthead.organization, prefs?.blockedEmployers);
+  if (blockedHit) {
+    const already = next.dealbreakers.some((d) => d.requirement === BLOCKED_EMPLOYER_DEALBREAKER);
+    if (!already) {
+      next = {
+        ...next,
+        dealbreakers: [
+          ...next.dealbreakers,
+          {
+            requirement: BLOCKED_EMPLOYER_DEALBREAKER,
+            evidence: next.masthead.organization.trim(),
+            reason: `Matched blocked employer "${blockedHit}"`,
+          },
+        ],
+      };
+    }
+  }
+
+  const hasDb = next.dealbreakers.length > 0;
+  const geoExcluded = next.geo?.verdict === 'excluded';
+  const scam = looksLikeScam(next);
+  const hardGate = hasDb || geoExcluded || scam;
+
+  let fit = next.fit;
+  let apply = next.apply;
+
+  if (hasDb || geoExcluded) {
+    if (apply.verdict !== 'no') {
+      apply = {
+        verdict: 'no',
+        rationale: [
+          apply.rationale,
+          hasDb
+            ? 'Apply forced to no: hard dealbreaker present.'
+            : 'Apply forced to no: geo excluded.',
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .trim(),
+      };
+    }
+    fit = capFitAt(fit, 60, 'Fit capped at Unlikely: hard gate present.');
+  }
+
+  if (scam) {
+    fit = { label: 'Poor fit', score: 0, rationale: fit.rationale || 'Scam / shell signals.' };
+    apply = {
+      verdict: 'no',
+      rationale: [apply.rationale, 'Apply no: scam / shell signals.'].filter(Boolean).join(' ').trim(),
+    };
+  }
+
+  // Model sometimes emits Poor/No while skillMatches + summary show a strong match
+  // and dealbreakers are empty (Matrix Retail ZIP case). Lift ratings only when
+  // there is still no hard disqualifier after preference merge.
+  if (!hardGate) {
+    const strength = skillEvidenceStrength(next);
+    if (strength === 'strong') {
+      fit = floorFitAt(fit, 85, 'Fit raised: skills substantially match with no hard gates.');
+      apply = raiseApply(apply, 'yes', 'Apply raised: no hard gates and strong skill evidence.');
+    } else if (strength === 'good') {
+      fit = floorFitAt(fit, 75, 'Fit raised: solid skill matches with no hard gates.');
+      apply = raiseApply(apply, 'maybe', 'Apply raised from no: no hard gates.');
+    } else if (
+      (next.geo?.verdict === 'eligible' || next.geo?.verdict === 'unclear') &&
+      (fit.score === 0 || apply.verdict === 'no')
+    ) {
+      // Thin skill list but clear geo + empty dealbreakers: do not leave Poor/No.
+      fit = floorFitAt(fit, 60, 'Fit raised from Poor: no hard gates triggered.');
+      apply = raiseApply(apply, 'maybe', 'Apply raised from no: no hard gates.');
+    }
+  }
+
+  if (fit.label !== FIT_LABEL_BY_SCORE[fit.score]) {
+    fit = { ...fit, label: FIT_LABEL_BY_SCORE[fit.score] };
+  }
+
+  if (fit === next.fit && apply === next.apply && next.dealbreakers === analysis.dealbreakers) {
+    return next;
+  }
+  return { ...next, fit, apply };
 }

@@ -75,7 +75,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.4.0', 'manifest version');
+assert(manifest.version === '1.4.1', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
@@ -420,6 +420,62 @@ assert(boardDisplayNames().includes('Ashby'), 'names');
     'remoteOnly dealbreaker'
   );
   assert(remoteOnlyFloored.fit.score <= 60, 'remoteOnly fit capped');
+
+  // Model emitted Poor/Apply-no despite strong skills + eligible geo + empty dealbreakers
+  // (Matrix Retail–style inconsistency). Floors must raise Fit/Apply to match evidence.
+  const reconciledOptimistic = applyRatingFloors(
+    {
+      ...EMPTY_ANALYSIS,
+      summary:
+        'Strong alignment on modern JS and full-stack. No hard gates; skills substantially match.',
+      fit: {
+        label: 'Poor fit',
+        score: 0,
+        rationale: 'Model pessimism despite matches',
+      },
+      apply: { verdict: 'no', rationale: 'Inconsistent refuse' },
+      geo: {
+        verdict: 'eligible',
+        reason: 'Remote role; no residency restriction.',
+        method: 'model',
+      },
+      skillMatches: [
+        {
+          requirement: 'Significant experience working with modern Javascript',
+          claimant: '11y JS',
+          status: 'match',
+          confidence: 'high',
+        },
+        {
+          requirement: 'Knowledge of front-end languages (React, Ember.js, SCSS)',
+          claimant: 'React/TypeScript',
+          status: 'match',
+          confidence: 'high',
+        },
+        {
+          requirement: 'Knowledge of Python backed APIs (Flask, Sanic)',
+          claimant: 'Flask/Django',
+          status: 'match',
+          confidence: 'high',
+        },
+        {
+          requirement: 'Familiarity with Docker and Kubernetes',
+          claimant: 'Docker production; K8s limited',
+          status: 'partial',
+          confidence: 'medium',
+        },
+      ],
+      dealbreakers: [],
+      skipFlags: [],
+    },
+    DEFAULT_CONFIG
+  );
+  assert(reconciledOptimistic.fit.score >= 85, 'strong skills reconcile Fit ≥ Good');
+  assert(reconciledOptimistic.apply.verdict === 'yes', 'strong skills reconcile Apply yes');
+  assert(
+    /raised|Reconciled|Floored/i.test(reconciledOptimistic.fit.rationale),
+    'reconcile notes Fit rationale'
+  );
 }
 
 {

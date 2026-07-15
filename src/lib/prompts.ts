@@ -127,11 +127,15 @@ skipFlags: for each provided skip trigger, flag it only if the posting genuinely
 Fit (locked label↔score pairs — use exactly these):
 - Perfect fit = 100, Excellent fit = 95, Good fit = 85, Possible fit = 75, Unlikely fit = 60, Poor fit = 0
 Weigh: skill match overall, location/remote preference, pay (when floors active), PERM/skip triggers and authorization language, dealbreakers, soft signals, and scam/shell postingSmell. Hard geographic or requirement dealbreakers should not land above Unlikely (60). Scam/shell signals → Poor (0).
+Consistency with Skills / dealbreakers / geo (critical — masthead must match the body):
+- Never emit Poor (0) or Apply "no" when dealbreakers is empty, geo is not "excluded", and no scam/shell/PERM/H-1B skipFlags fired. Familiarity-level skill gaps (partial Docker/K8s, etc.) are Soft concerns — not Poor.
+- When several Skills rows use status "match", dealbreakers is empty, and geo is eligible/unclear: Fit must be at least Possible (75); prefer Good (85)+ when matches clearly outnumber mismatches. Apply must not be "no" (use "yes" when hard gates are clear; "maybe" only for true ambiguity).
+- Fit.rationale and Apply.rationale must agree with the masthead labels: do not praise strong alignment while setting Poor / Apply no.
 
 Apply?:
 - "yes" — all hard requirements are met (even if the role is not ideal).
 - "maybe" — language introduces ambiguity/uncertainty that is not clearly disqualifying; human review needed.
-- "no" — a clear disqualifier exists, or the posting appears to be a scam.
+- "no" — only when a clear hard disqualifier exists (non-empty dealbreakers, geo excluded, clearance skip gate, pay floor fail when use_floors, scam/shell), not for soft skill gaps alone.
 Keep "rationale" short.
 
 declutteredJD: rewrite the posting compressed and skimmable. Operative qualifications first (Required, then Preferred), then core responsibilities. Remove marketing copy, HR/PR platitudes, awards and accolades, and boilerplate. Keep at most a one-line culture note, and only if material. Do not invent anything; use only what the posting states.`;
