@@ -16,6 +16,7 @@ const CITY_COORDS: ReadonlyArray<{ pattern: RegExp; label: string; coord: readon
   { pattern: /\bboston\b/i, label: 'Boston, MA', coord: [42.3601, -71.0589] },
   { pattern: /\bdenver\b/i, label: 'Denver, CO', coord: [39.7392, -104.9903] },
   { pattern: /\baustin\b/i, label: 'Austin, TX', coord: [30.2672, -97.7431] },
+  { pattern: /\bsan\s*antonio\b/i, label: 'San Antonio, TX', coord: [29.4241, -98.4936] },
   { pattern: /\bdallas\b/i, label: 'Dallas, TX', coord: [32.7767, -96.797] },
   { pattern: /\bhouston\b/i, label: 'Houston, TX', coord: [29.7604, -95.3698] },
   { pattern: /\bphiladelphia\b|\bphilly\b/i, label: 'Philadelphia, PA', coord: [39.9526, -75.1652] },
@@ -31,6 +32,7 @@ const LOCATION_CONTEXT_RE =
 const STATE_COORDS: ReadonlyArray<{ code: string; label: string; coord: readonly [number, number] }> = [
   { code: 'WA', label: 'Washington State', coord: [47.4009, -121.4905] },
   { code: 'OR', label: 'Oregon', coord: [43.8041, -120.5542] },
+  { code: 'ID', label: 'Idaho', coord: [44.2405, -114.4788] },
   { code: 'CA', label: 'California', coord: [36.7783, -119.4179] },
   { code: 'TX', label: 'Texas', coord: [31.9686, -99.9018] },
   { code: 'NY', label: 'New York State', coord: [42.1657, -74.9481] },
@@ -40,17 +42,23 @@ const STATE_COORDS: ReadonlyArray<{ code: string; label: string; coord: readonly
   { code: 'MA', label: 'Massachusetts', coord: [42.2302, -71.5301] },
   { code: 'CO', label: 'Colorado', coord: [39.0598, -105.3111] },
   { code: 'GA', label: 'Georgia', coord: [33.0406, -83.6431] },
+  { code: 'AZ', label: 'Arizona', coord: [33.7298, -111.4312] },
+  { code: 'NV', label: 'Nevada', coord: [38.3135, -117.0554] },
+  { code: 'UT', label: 'Utah', coord: [40.1500, -111.8624] },
 ];
+
+const NEGATION_POLARITY_RE =
+  /\b(?:not|cannot|can\s+not|never|no|excluding|except(?:ing)?|won't|will\s+not)\b/i;
 
 /**
  * True when a match at `index` sits in a residency exclusion / negation window
- * (e.g. "not accepting … in California, Illinois, and New York").
+ * (cities named only inside "not accepting … STATE" are not the job site).
  */
 export function isNegatedLocationMention(text: string, index: number): boolean {
   if (index < 0) return false;
   const start = Math.max(0, index - 160);
   const window = text.slice(start, index);
-  return (
+  if (
     /\bnot\s+accepting\b/i.test(window) ||
     /\bcannot\s+be\s+considered\b/i.test(window) ||
     /\bcan\s+not\s+be\s+considered\b/i.test(window) ||
@@ -61,9 +69,38 @@ export function isNegatedLocationMention(text: string, index: number): boolean {
     /\boutside\s+of\b/i.test(window) ||
     /\bother\s+than\b/i.test(window) ||
     /\bdo\s+not\s+(?:hire|accept|consider)\b/i.test(window) ||
-    /\bwill\s+not\s+(?:hire|accept|consider)\b/i.test(window) ||
-    /\bapplications?\s+from\b/i.test(window)
-  );
+    /\bwill\s+not\s+(?:hire|accept|consider)\b/i.test(window)
+  ) {
+    return true;
+  }
+  // "applications from …" alone is too broad; require negation polarity in-window.
+  return /\bapplications?\s+from\b/i.test(window) && NEGATION_POLARITY_RE.test(window);
+}
+
+/** Prefer a line that mentions the resolved posting place; else a location-ish line. */
+export function pickLocationEvidenceLine(stated: string, postingLabel: string): string {
+  const lines = stated
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const tokens = postingLabel
+    .replace(/,/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !/^ZIP$/i.test(t) && !/^\d+$/.test(t));
+  for (const line of lines) {
+    if (
+      tokens.some((tok) => {
+        const escaped = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`\\b${escaped}\\b`, 'i').test(line);
+      })
+    ) {
+      return line.slice(0, 160);
+    }
+  }
+  const locish = lines.find((l) => /location|onsite|on-site|office|hybrid|\bremote\b/i.test(l));
+  if (locish) return locish.slice(0, 160);
+  return stated.slice(0, 160);
 }
 
 export function padZip(zip: string | number | null | undefined): string {
@@ -153,33 +190,49 @@ export function extractCityCoord(text: string): { label: string; coord: readonly
   return best ? { label: best.label, coord: best.coord } : null;
 }
 
-/** Prefer "City, ST" / "City, State · Remote" header signals when the city itself is unknown. */
+/**
+ * Prefer "City, ST" / "City, ST · Remote" header signals.
+ * Label always keeps the city name; coords prefer a known city centroid, else state.
+ */
 export function extractStateFromLocationHeader(
   text: string
 ): { label: string; coord: readonly [number, number] } | null {
   if (!text) return null;
-  // Score the earliest non-negated City, ST-style hit in the early header / work-location lines.
   const header = text.slice(0, 1500);
   const re =
     /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*([A-Z]{2})\b(?:\s*[·•|,/-]\s*|\s+)(?:Remote|Hybrid|On[\s-]?site)?/g;
   let m: RegExpExecArray | null;
-  let best: { code: string; index: number } | null = null;
+  let best: { city: string; code: string; index: number } | null = null;
   while ((m = re.exec(header))) {
     const index = m.index;
+    const city = (m[1] || '').trim();
     const code = (m[2] || '').toUpperCase();
-    if (!code || isNegatedLocationMention(header, index)) continue;
-    if (!best || index < best.index) best = { code, index };
+    if (!city || !code || isNegatedLocationMention(header, index)) continue;
+    if (!best || index < best.index) best = { city, code, index };
   }
   if (!best) {
-    // Fallback: Work Location: … Remote but … still may list City, ST earlier
     const loose = header.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*([A-Z]{2})\b/);
-    if (loose?.[2] && !isNegatedLocationMention(header, loose.index ?? 0)) {
-      best = { code: loose[2].toUpperCase(), index: loose.index ?? 0 };
+    if (
+      loose?.[1] &&
+      loose[2] &&
+      !isNegatedLocationMention(header, loose.index ?? 0)
+    ) {
+      best = {
+        city: loose[1].trim(),
+        code: loose[2].toUpperCase(),
+        index: loose.index ?? 0,
+      };
     }
   }
   if (!best) return null;
+
+  const cityHit = extractCityCoord(`${best.city}, ${best.code}`);
+  if (cityHit) return cityHit;
+
   const state = STATE_COORDS.find((s) => s.code === best!.code);
-  return state ? { label: state.label, coord: state.coord } : null;
+  if (!state) return null;
+  // Keep city in the label even when falling back to the state centroid for distance.
+  return { label: `${best.city}, ${best.code}`, coord: state.coord };
 }
 
 export type ResolvePostingLocationArgs = {
@@ -193,8 +246,8 @@ export type ResolvedPostingLocation =
   | { kind: 'city'; coord: readonly [number, number]; label: string };
 
 /**
- * Resolve where the job is — never trust a bare page-wide ZIP that merely equals
- * an operator ZIP (common false positive when the JD only names a city).
+ * Resolve where the job is from masthead / header signals first.
+ * Never treat a bare page ZIP that only matches an operator ZIP as the job site.
  */
 export function resolvePostingLocation({
   pageText = '',
@@ -218,7 +271,7 @@ export function resolvePostingLocation({
     return { kind: 'city', ...cityFromStated };
   }
 
-  // Prefer City, ST header (e.g. Ferndale, WA · Remote) before exclusion-tainted cities.
+  // Prefer City, ST header ("City, ST · Remote") before exclusion-tainted cities.
   const stateFromHeader = extractStateFromLocationHeader(corpus);
   if (stateFromHeader) {
     // If a known city appears *before* the state header hit and is not negated, prefer it.
@@ -365,11 +418,17 @@ export function applyDeterministicGeo(
     if (computed.verdict === 'excluded' && model === 'onsite') {
       const already = dealbreakers.some((d) => /onsite|location|commute/i.test(d.requirement));
       if (!already) {
+        const resolved = resolvePostingLocation({
+          pageText,
+          statedLocation: stated,
+          operatorZips: locations.map((l) => l.zip),
+        });
+        const evidence = pickLocationEvidenceLine(stated, resolved?.label || computed.reason);
         dealbreakers = [
           {
             requirement: ONSITE_COMMUTE_DEALBREAKER,
             reason: computed.reason,
-            evidence: stated.split('\n').find((l) => /york|location|onsite|office/i.test(l)) || stated.slice(0, 160),
+            evidence,
           },
           ...dealbreakers,
         ];

@@ -1,0 +1,61 @@
+{
+  "masthead": {
+    "organization": "Matrix Retail",
+    "title": "Full Stack Developer",
+    "workModel": "remote",
+    "travel": "None",
+    "employmentTerms": "Full-time",
+    "healthInsurance": "Unknown",
+    "payRange": "Not stated",
+    "seniority": "Mid",
+    "workAuthorization": "US"
+  },
+  "geo": {
+    "verdict": "eligible",
+    "reason": "Remote role; no residency restriction.",
+    "method": "model"
+  },
+  "skillMatches": [
+    {
+      "requirement": "Significant experience working with modern Javascript",
+      "evidence": "11y JS",
+      "reason": "Direct match",
+      "status": "match",
+      "confidence": "high"
+    },
+    {
+      "requirement": "Knowledge of front-end languages (React, Ember.js, SCSS)",
+      "evidence": "React/TypeScript",
+      "reason": "Direct match",
+      "status": "match",
+      "confidence": "high"
+    },
+    {
+      "requirement": "Knowledge of Python backed APIs (Flask, Sanic)",
+      "evidence": "Flask/Django",
+      "reason": "Direct match",
+      "status": "match",
+      "confidence": "high"
+    },
+    {
+      "requirement": "Familiarity with Docker and Kubernetes",
+      "evidence": "Docker production; K8s limited",
+      "reason": "Partial Docker/K8s coverage",
+      "status": "partial",
+      "confidence": "medium"
+    }
+  ],
+  "dealbreakers": [],
+  "skipFlags": [],
+  "postingSmell": "",
+  "declutteredJD": "Full stack remote role at Matrix Retail.",
+  "fit": {
+    "label": "Poor fit",
+    "score": 0,
+    "rationale": "Model pessimism despite matches"
+  },
+  "apply": {
+    "verdict": "no",
+    "rationale": "Inconsistent refuse"
+  }
+}

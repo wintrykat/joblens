@@ -628,7 +628,7 @@ function Options(): JSX.Element {
             hard-skip.
           </p>
           <label>
-            Where you can work from for remote roles (comma separated, e.g. TX, PA)
+            Where you can work from for remote roles (comma-separated US states, e.g. CA, NY)
             <input
               value={cfg.workEligibleRegions.join(', ')}
               onChange={(e) =>

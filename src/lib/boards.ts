@@ -2,6 +2,12 @@ import type { Board, BoardId } from '../types/domain';
 
 const TEXT_CAP = 24_000;
 
+/** Prefer innerText; fall back to textContent (jsdom / some embeds lack innerText). */
+function elementText(el: Element): string {
+  const html = el as HTMLElement;
+  return (html.innerText || el.textContent || '').trim();
+}
+
 /** Default: largest of main / article / body, capped. */
 export function defaultExtractPageText(doc: Document = document): string {
   const candidates = [
@@ -13,7 +19,7 @@ export function defaultExtractPageText(doc: Document = document): string {
 
   let best = '';
   for (const el of candidates) {
-    const t = ((el as HTMLElement).innerText || '').trim();
+    const t = elementText(el);
     if (t.length > best.length) best = t;
   }
   return best.slice(0, TEXT_CAP);
@@ -23,7 +29,7 @@ function extractBySelectors(doc: Document, selectors: readonly string[]): string
   let best = '';
   for (const sel of selectors) {
     for (const el of doc.querySelectorAll(sel)) {
-      const t = ((el as HTMLElement).innerText || '').trim();
+      const t = elementText(el);
       if (t.length > best.length) best = t;
     }
   }

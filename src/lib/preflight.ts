@@ -15,11 +15,12 @@ const ONSITE_RE =
 const HYBRID_RE = /\bhybrid\b/i;
 const REMOTE_STRONG_RE =
   /\b(?:fully\s+remote|100%\s+remote|remote[\s-]?first|work\s+from\s+home|\bwfh\b|remote\s+ok|remote\s+position|primarily\s+remote)\b/i;
-/** Header / work-location remote (e.g. "Ferndale, WA · Remote", "Remote but 2 weeks…"). */
+/** Header / work-location remote ("City, ST · Remote", "Work Location: Remote but …"). */
 const REMOTE_PRIMARY_RE =
   /(?:^|[·•|,]\s*|\bwork\s*location\s*:\s*|\blocation\s*:\s*)remote\b/i;
+/** Short onsite training/onboarding — travel cadence, not hybrid primary. */
 const SHORT_ONSITE_TRAINING_RE =
-  /\b\d+\s*weeks?\s+(?:of\s+)?(?:mandatory\s+)?(?:training\s+)?on[\s-]?site\b|\bon[\s-]?site\s+training\b|\bmandatory\s+training\s+on[\s-]?site\b/i;
+  /\b\d+\s*(?:weeks?|days?)\s+(?:of\s+)?(?:mandatory\s+)?(?:(?:training|onboarding|orientation)\s+)?on[\s-]?site\b|\bon[\s-]?site\s+(?:training|onboarding|orientation)\b|\b(?:mandatory|initial)\s+(?:training|onboarding|orientation)\s+on[\s-]?site\b|\b(?:initial\s+)?onboarding\s+on[\s-]?site\b|\borientation\s+on[\s-]?site\b/i;
 
 export function hasShortOnsiteTraining(pageText: string): boolean {
   return SHORT_ONSITE_TRAINING_RE.test(pageText);
@@ -262,8 +263,12 @@ export type ResidencyEval = {
 };
 
 /**
- * Local remote-residency gate for inverted exclude lists and include-only lists.
- * Hard skip only when configured regions are non-empty and all fail the rule.
+ * Local remote-residency gate.
+ *
+ * Principle: parse include/exclude state sets from the JD; hard_skip only when
+ * candidate regions are non-empty and their intersection with allowed residency
+ * is empty (exclude: every candidate state is forbidden; include: none overlap).
+ * HQ / "City · Remote" alone is not a residency restriction.
  */
 export function evaluateRemoteResidency(
   pageText: string,
@@ -633,8 +638,9 @@ function looksResidencyHardSkip(result: PreflightResult): boolean {
 }
 
 /**
- * Demote bogus Haiku residency hard_skips when local residency is OK, or when
- * the JD is clearly nationwide remote. Does not touch pure local hard_skips.
+ * Prefer decisive local residency parse over Haiku: demote model hard_skips when
+ * local says residency_ok / clear intersection, or the JD is unrestricted remote.
+ * Does not clear local-only hard_skips.
  */
 export function sanitizeHaikuResidencySkip(
   result: PreflightResult,

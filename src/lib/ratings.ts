@@ -19,6 +19,17 @@ export const REMOTE_ONLY_DEALBREAKER = 'Remote-only preference excludes this wor
 /** Deterministic dealbreaker when organization matches preferences.blockedEmployers. */
 export const BLOCKED_EMPLOYER_DEALBREAKER = 'Employer matches blocked-employers list';
 
+/** Fit floor when skill evidence is strong and no hard gate. */
+export const FIT_FLOOR_STRONG: FitScore = 85;
+/** Fit floor when skill evidence is good and no hard gate. */
+export const FIT_FLOOR_GOOD: FitScore = 75;
+/** Fit floor / hard-gate cap (Unlikely). */
+export const FIT_FLOOR_UNLIKELY: FitScore = 60;
+
+const STRONG_MATCH_MIN = 3;
+const STRONG_MATCH_RATIO = 0.75;
+const GOOD_MATCH_MIN = 2;
+
 /**
  * Prefer negative language for hard-gate titles. Models often invert the
  * commute constraint into a positive preference statement.
@@ -87,13 +98,13 @@ export function looksLikeScam(analysis: Analysis): boolean {
   return analysis.skipFlags.some((f) => /shell company|scam|fraud/i.test(f.trigger));
 }
 
-type SkillStrength = 'none' | 'good' | 'strong';
+export type SkillStrength = 'none' | 'good' | 'strong';
 
 /**
  * Observable skill evidence for lifting contradictory Poor/No when there is
- * no hard gate. Ignores soft preference preferences.
+ * no hard gate. Absolute match counts or high match ratio (no mismatches).
  */
-function skillEvidenceStrength(analysis: Analysis): SkillStrength {
+export function skillEvidenceStrength(analysis: Analysis): SkillStrength {
   const skills = analysis.skillMatches;
   if (!skills.length) return 'none';
   let matches = 0;
@@ -105,8 +116,16 @@ function skillEvidenceStrength(analysis: Analysis): SkillStrength {
     else if (s.status === 'mismatch') mismatches++;
   }
   if (mismatches > 0) return 'none';
-  if (matches >= 3 && skills.length >= 3) return 'strong';
-  if (matches >= 2 && matches >= partials && skills.length >= 2) return 'good';
+  const ratio = matches / skills.length;
+  if (
+    (matches >= STRONG_MATCH_MIN && skills.length >= STRONG_MATCH_MIN) ||
+    (matches >= GOOD_MATCH_MIN && skills.length >= GOOD_MATCH_MIN && ratio >= STRONG_MATCH_RATIO)
+  ) {
+    return 'strong';
+  }
+  if (matches >= GOOD_MATCH_MIN && matches >= partials && skills.length >= GOOD_MATCH_MIN) {
+    return 'good';
+  }
   return 'none';
 }
 
@@ -121,6 +140,8 @@ function raiseApply(apply: ApplyRating, min: ApplyVerdict, rationaleExtra: strin
 
 /**
  * Cap Fit/Apply when hard gates fire; lift contradictory Poor/No when they do not.
+ *
+ * Consistency: empty hard gates + solid skillMatches must not leave Poor / Apply no.
  */
 export function applyRatingFloors(analysis: Analysis, cfg?: Config | null): Analysis {
   let next: Analysis = {
@@ -188,7 +209,7 @@ export function applyRatingFloors(analysis: Analysis, cfg?: Config | null): Anal
           .trim(),
       };
     }
-    fit = capFitAt(fit, 60, 'Fit capped at Unlikely: hard gate present.');
+    fit = capFitAt(fit, FIT_FLOOR_UNLIKELY, 'Fit capped at Unlikely: hard gate present.');
   }
 
   if (scam) {
@@ -199,23 +220,20 @@ export function applyRatingFloors(analysis: Analysis, cfg?: Config | null): Anal
     };
   }
 
-  // Model sometimes emits Poor/No while skillMatches + summary show a strong match
-  // and dealbreakers are empty (Matrix Retail ZIP case). Lift ratings only when
-  // there is still no hard disqualifier after preference merge.
+  // Lift contradictory Poor/No only when no hard disqualifier remains after preference merge.
   if (!hardGate) {
     const strength = skillEvidenceStrength(next);
     if (strength === 'strong') {
-      fit = floorFitAt(fit, 85, 'Fit raised: skills substantially match with no hard gates.');
+      fit = floorFitAt(fit, FIT_FLOOR_STRONG, 'Fit raised: skills substantially match with no hard gates.');
       apply = raiseApply(apply, 'yes', 'Apply raised: no hard gates and strong skill evidence.');
     } else if (strength === 'good') {
-      fit = floorFitAt(fit, 75, 'Fit raised: solid skill matches with no hard gates.');
+      fit = floorFitAt(fit, FIT_FLOOR_GOOD, 'Fit raised: solid skill matches with no hard gates.');
       apply = raiseApply(apply, 'maybe', 'Apply raised from no: no hard gates.');
     } else if (
       (next.geo?.verdict === 'eligible' || next.geo?.verdict === 'unclear') &&
       (fit.score === 0 || apply.verdict === 'no')
     ) {
-      // Thin skill list but clear geo + empty dealbreakers: do not leave Poor/No.
-      fit = floorFitAt(fit, 60, 'Fit raised from Poor: no hard gates triggered.');
+      fit = floorFitAt(fit, FIT_FLOOR_UNLIKELY, 'Fit raised from Poor: no hard gates triggered.');
       apply = raiseApply(apply, 'maybe', 'Apply raised from no: no hard gates.');
     }
   }

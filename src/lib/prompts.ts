@@ -128,7 +128,7 @@ Fit (locked label↔score pairs — use exactly these):
 - Perfect fit = 100, Excellent fit = 95, Good fit = 85, Possible fit = 75, Unlikely fit = 60, Poor fit = 0
 Weigh: skill match overall, location/remote preference, pay (when floors active), PERM/skip triggers and authorization language, dealbreakers, soft signals, and scam/shell postingSmell. Hard geographic or requirement dealbreakers should not land above Unlikely (60). Scam/shell signals → Poor (0).
 Consistency with Skills / dealbreakers / geo (critical — masthead must match the body):
-- Never emit Poor (0) or Apply "no" when dealbreakers is empty, geo is not "excluded", and no scam/shell/PERM/H-1B skipFlags fired. Familiarity-level skill gaps (partial Docker/K8s, etc.) are Soft concerns — not Poor.
+- Never emit Poor (0) or Apply "no" when dealbreakers is empty, geo is not "excluded", and no scam/shell/PERM/H-1B skipFlags fired. Familiarity-level / partial skill rows are Soft concerns — not Poor.
 - When several Skills rows use status "match", dealbreakers is empty, and geo is eligible/unclear: Fit must be at least Possible (75); prefer Good (85)+ when matches clearly outnumber mismatches. Apply must not be "no" (use "yes" when hard gates are clear; "maybe" only for true ambiguity).
 - Fit.rationale and Apply.rationale must agree with the masthead labels: do not praise strong alignment while setting Poor / Apply no.
 
@@ -338,18 +338,18 @@ Rules:
 - soft = possible concern but not definitive.
 - clear = no hard-gate hits found in the text provided.
 - flags: short machine ids when relevant (e.g. blocked_employer, remote_only, clearance, perm, shell, geo_excluded, skip_category, residency_excluded).
-- Keep reasons to 1–3 short human-readable strings (never camelCase config field names). Prefer wording like "Your remote residency is limited to TX, PA" not "workEligibleRegions…".
+- Keep reasons to 1–3 short human-readable strings (never camelCase config field names). Prefer wording like "Your remote residency is limited to your configured states" not "workEligibleRegions…".
 - organization: best guess company name if present, else "".
 
 Geography / residency (critical — follow exactly):
 - Commute locations (when configured) apply to onsite/hybrid only. Do not hard_skip a remote role because the employer's listed city/HQ is outside commute ZIPs.
 - candidateRemoteResidency.regions = where the CANDIDATE may live/work FROM for remote roles. Empty regions list = no residency filter (all remote OK).
 - For remote roles: hard_skip for residency ONLY if the posting EXPLICITLY restricts employee residency/work location to a set of regions/states/countries and NONE of those intersect the candidate's list.
-- INVERTED exclusions: "not accepting applicants from CA, IL, NY" / "cannot be considered" means those states are FORBIDDEN — candidates in other states (e.g. TX, PA) are permitted. Do NOT hard_skip when the candidate's regions are outside the excluded list.
-- Never treat a city/state that appears only inside an exclusion sentence as the job's work location (e.g. "New York" in "not accepting … New York" is not the posting site).
+- INVERTED exclusions: "not accepting applicants from STATE_A, STATE_B" / "cannot be considered" means those states are FORBIDDEN — candidates in other configured states are permitted. Do NOT hard_skip when the candidate's regions are outside the excluded list.
+- Never treat a city/state that appears only inside an exclusion sentence as the job's work location (a state named only under "not accepting …" is not the posting site).
 - Remote + "nationwide", "open to all US", "no [state] residency required", or no residency restriction → clear for residency (even if HQ/city is listed).
-- Listing a city next to Remote (e.g. "Madison, WI · Remote" or "Ferndale, WA · Remote") is NOT a residency restriction by itself.
-- Short mandatory onsite training (e.g. "2 weeks onsite") with Remote-primary work → Soft under occasionalTravelAllowance when configured; not a commute hard_skip.`;
+- Listing a city next to Remote ("City, ST · Remote") is NOT a residency restriction by itself.
+- Short mandatory onsite training / onboarding / orientation (days or weeks) with Remote-primary work → Soft under occasionalTravelAllowance when configured; not a commute hard_skip.`;
 
 export function buildPreflightUser(args: {
   hardGatesJson: string;
@@ -393,8 +393,12 @@ export function buildPreflightHardGates(profile: Config): Record<string, unknown
     candidateRemoteResidency: {
       regions,
       emptyMeansNoFilter: regions.length === 0,
+      exampleWording:
+        regions.length > 0
+          ? `Your remote residency is limited to ${regions.join(', ')}`
+          : 'No remote residency filter (empty regions)',
       rule:
-        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency such that NONE of the candidate regions are allowed. Inverted lists ("not accepting CA, IL, NY") PERMIT other states. Nationwide / no residency required → do not hard_skip. Do not treat cities named only in exclusion sentences as the job site.',
+        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency such that NONE of the candidate regions are allowed. Inverted exclusion lists PERMIT other states. Nationwide / no residency required → do not hard_skip. Do not treat cities named only in exclusion sentences as the job site.',
     },
     occasionalTravelRule:
       prefs.occasionalTravelAllowance === 'none'

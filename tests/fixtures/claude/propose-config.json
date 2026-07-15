@@ -1,0 +1,19 @@
+{
+  "summary": "From resume",
+  "changes": [
+    {
+      "id": "1",
+      "path": "skillClaims",
+      "label": "Add TypeScript",
+      "rationale": "Listed on resume",
+      "value": [{ "skill": "TypeScript", "standing": "held", "years": 4 }]
+    },
+    {
+      "id": "2",
+      "path": "preferences.remoteOnly",
+      "label": "Remote only",
+      "rationale": "Notes say remote only",
+      "value": true
+    }
+  ]
+}

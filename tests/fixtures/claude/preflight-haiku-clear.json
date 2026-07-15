@@ -1,0 +1,7 @@
+{
+  "verdict": "clear",
+  "reasons": ["No hard gates detected"],
+  "workModel": "remote",
+  "organization": "Acme",
+  "flags": []
+}

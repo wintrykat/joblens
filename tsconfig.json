@@ -19,13 +19,13 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["chrome", "vite/client"],
+    "types": ["chrome", "vite/client", "vitest/importMeta"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     },
     "noEmit": true
   },
-  "include": ["src", "vite.config.ts", "scripts"],
+  "include": ["src", "vite.config.ts", "vitest.config.ts", "scripts", "tests"],
   "exclude": ["node_modules", "dist"]
 }

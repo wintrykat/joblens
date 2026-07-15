@@ -1,0 +1,16 @@
+{
+  "skills": [
+    {
+      "skill": "TypeScript",
+      "years": 5,
+      "confidence": "high",
+      "source": "Recent roles"
+    },
+    {
+      "skill": "React",
+      "years": 4,
+      "confidence": "high",
+      "source": "Frontend work"
+    }
+  ]
+}
