@@ -47,7 +47,7 @@ export function normalizeDealbreakerTitles(dealbreakers: Analysis['dealbreakers'
 
 export function findBlockedEmployerHit(
   organization: string,
-  blocked: string[] | undefined,
+  blocked: readonly string[] | undefined,
 ): string | null {
   const org = organization.trim().toLowerCase();
   if (!org || !blocked?.length) return null;

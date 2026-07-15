@@ -75,7 +75,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.4.1', 'manifest version');
+assert(manifest.version === '1.4.2', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
@@ -426,8 +426,6 @@ assert(boardDisplayNames().includes('Ashby'), 'names');
   const reconciledOptimistic = applyRatingFloors(
     {
       ...EMPTY_ANALYSIS,
-      summary:
-        'Strong alignment on modern JS and full-stack. No hard gates; skills substantially match.',
       fit: {
         label: 'Poor fit',
         score: 0,
@@ -442,25 +440,29 @@ assert(boardDisplayNames().includes('Ashby'), 'names');
       skillMatches: [
         {
           requirement: 'Significant experience working with modern Javascript',
-          claimant: '11y JS',
+          evidence: '11y JS',
+          reason: 'Direct match',
           status: 'match',
           confidence: 'high',
         },
         {
           requirement: 'Knowledge of front-end languages (React, Ember.js, SCSS)',
-          claimant: 'React/TypeScript',
+          evidence: 'React/TypeScript',
+          reason: 'Direct match',
           status: 'match',
           confidence: 'high',
         },
         {
           requirement: 'Knowledge of Python backed APIs (Flask, Sanic)',
-          claimant: 'Flask/Django',
+          evidence: 'Flask/Django',
+          reason: 'Direct match',
           status: 'match',
           confidence: 'high',
         },
         {
           requirement: 'Familiarity with Docker and Kubernetes',
-          claimant: 'Docker production; K8s limited',
+          evidence: 'Docker production; K8s limited',
+          reason: 'Partial Docker/K8s coverage',
           status: 'partial',
           confidence: 'medium',
         },
