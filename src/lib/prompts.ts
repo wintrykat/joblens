@@ -126,7 +126,7 @@ skipFlags: for each provided skip trigger, flag it only if the posting genuinely
 
 Fit (locked label↔score pairs — use exactly these):
 - Perfect fit = 100, Excellent fit = 95, Good fit = 85, Possible fit = 75, Unlikely fit = 60, Poor fit = 0
-Weigh: skill match overall, location/remote preference, pay (when floors active), PERM/skip triggers and authorization language, dealbreakers, soft signals, and scam/shell postingSmell. Hard geographic or requirement dealbreakers should not land above Unlikely (60). Scam/shell signals → Poor (0).
+Weigh: skill match overall, location/remote preference, pay (when floors active), PERM/skip triggers and authorization language, dealbreakers, soft signals, and scam/shell postingSmell. Hard geographic or requirement dealbreakers should not land above Unlikely (60). Affirmative scam/shell signals → Poor (0). A postingSmell that says the employer looks legitimate / "no scam/shell" is NOT a scam signal.
 Consistency with Skills / dealbreakers / geo (critical — masthead must match the body):
 - Never emit Poor (0) or Apply "no" when dealbreakers is empty, geo is not "excluded", and no scam/shell/PERM/H-1B skipFlags fired. Familiarity-level / partial skill rows are Soft concerns — not Poor.
 - When several Skills rows use status "match", dealbreakers is empty, and geo is eligible/unclear: Fit must be at least Possible (75); prefer Good (85)+ when matches clearly outnumber mismatches. Apply must not be "no" (use "yes" when hard gates are clear; "maybe" only for true ambiguity).

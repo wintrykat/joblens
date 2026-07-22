@@ -6,6 +6,8 @@ import {
   REMOTE_ONLY_DEALBREAKER,
   applyRatingFloors,
   findBlockedEmployerHit,
+  hasAffirmativeScamLanguage,
+  looksLikeScam,
   normalizeDealbreakerTitles,
   skillEvidenceStrength,
 } from './ratings';
@@ -118,6 +120,61 @@ describe('ratings', () => {
     expect(reconciled.fit.score).toBeGreaterThanOrEqual(FIT_FLOOR_STRONG);
     expect(reconciled.apply.verdict).toBe('yes');
     expect(reconciled.fit.rationale).toMatch(/raised|Reconciled|Floored/i);
+  });
+
+  it('does not treat negated “no scam/shell” notes as a hard gate', () => {
+    const smell =
+      'Legitimate established employer (Dimensional Fund Advisors) with minimal corporate boilerplate and EEO language; no scam/shell or PERM/H-1B indicators.';
+    expect(hasAffirmativeScamLanguage(smell)).toBe(false);
+    expect(
+      looksLikeScam(
+        makeAnalysis({
+          postingSmell: smell,
+          skipFlags: [],
+        })
+      )
+    ).toBe(false);
+
+    const reconciled = applyRatingFloors(
+      makeAnalysis({
+        fit: {
+          label: 'Poor fit',
+          score: 0,
+          rationale:
+            'Strong alignment on stack and experience. Solid match for a fully remote role at a legitimate employer.',
+        },
+        apply: { verdict: 'no', rationale: 'Inconsistent refuse' },
+        geo: {
+          verdict: 'eligible',
+          reason: 'Remote role; TX residency matches.',
+          method: 'model',
+        },
+        skillMatches: MATRIX_SKILL_MATCHES,
+        dealbreakers: [],
+        skipFlags: [],
+        postingSmell: smell,
+      }),
+      DEFAULT_CONFIG
+    );
+    expect(reconciled.fit.score).toBeGreaterThanOrEqual(FIT_FLOOR_STRONG);
+    expect(reconciled.apply.verdict).toBe('yes');
+    expect(reconciled.apply.rationale).not.toMatch(/scam\s*\/\s*shell/i);
+  });
+
+  it('still treats affirmative scam / shell-company language as a hard gate', () => {
+    expect(hasAffirmativeScamLanguage('Reads like a shell company with one officer.')).toBe(true);
+    expect(hasAffirmativeScamLanguage('Possible scam / phishing posting.')).toBe(true);
+    const floored = applyRatingFloors(
+      makeAnalysis({
+        fit: { label: 'Excellent fit', score: 95, rationale: 'skills ok' },
+        apply: { verdict: 'yes', rationale: 'ok' },
+        skillMatches: MATRIX_SKILL_MATCHES,
+        postingSmell: 'Thin entity; likely shell company recruiting spam.',
+      }),
+      DEFAULT_CONFIG
+    );
+    expect(floored.fit.score).toBe(0);
+    expect(floored.apply.verdict).toBe('no');
   });
 
   it('skillEvidenceStrength treats mismatches as none', () => {

@@ -92,10 +92,27 @@ function floorFitAt(fit: FitRating, minScore: FitScore, rationaleExtra: string):
   };
 }
 
+/** Affirmative scam/shell language — ignores “no scam/shell”, “not a fraud”, etc. */
+export function hasAffirmativeScamLanguage(text: string): boolean {
+  if (!text.trim()) return false;
+  const re = /\b(?:scam|phishing|fraud|shell\s+company)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const before = text.slice(Math.max(0, m.index - 28), m.index);
+    // "no scam/shell", "not a scam", "without phishing", "free of fraud", …
+    if (/\b(?:no|not|without|lacks?|free\s+of|neither|nor|isn't|is\s+not)\b[\s/,:.-]*$/i.test(before)) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 export function looksLikeScam(analysis: Analysis): boolean {
-  const smell = analysis.postingSmell.toLowerCase();
-  if (/(scam|shell\s+company|phishing|fraud)/i.test(smell)) return true;
-  return analysis.skipFlags.some((f) => /shell company|scam|fraud/i.test(f.trigger));
+  if (hasAffirmativeScamLanguage(analysis.postingSmell)) return true;
+  return analysis.skipFlags.some(
+    (f) => hasAffirmativeScamLanguage(f.trigger) || hasAffirmativeScamLanguage(f.evidence)
+  );
 }
 
 export type SkillStrength = 'none' | 'good' | 'strong';
