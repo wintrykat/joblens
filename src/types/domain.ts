@@ -470,6 +470,7 @@ export type BoardId =
   | 'workday'
   | 'dice'
   | 'remotive'
+  | 'remoteok'
   | 'weworkremotely'
   | 'monster'
   | 'himalayas'

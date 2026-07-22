@@ -41,8 +41,16 @@ export const BOARDS: readonly Board[] = [
   {
     id: 'builtin',
     name: 'Built In',
-    matchPatterns: ['*://*.builtin.com/*'],
+    matchPatterns: ['*://builtin.com/*', '*://*.builtin.com/*'],
     isPostingUrl: (url) => /builtin\.com\/(?:[^/]+\/)?job\//i.test(url),
+    extractPageText: (doc = document) =>
+      extractBySelectors(doc, [
+        '[class*="JobDescription"]',
+        '[data-id="job-description"]',
+        'article',
+        'main',
+        '#content',
+      ]),
   },
   {
     id: 'ziprecruiter',
@@ -75,19 +83,33 @@ export const BOARDS: readonly Board[] = [
   {
     id: 'indeed',
     name: 'Indeed',
-    matchPatterns: ['*://*.indeed.com/*'],
-    isPostingUrl: (url) =>
-      /indeed\.com\/(?:viewjob|rc\/clk|pagead\/clk)/i.test(url) ||
-      /[?&]jk=/i.test(url) ||
-      /indeed\.com\/jobs?\/view/i.test(url),
+    matchPatterns: ['*://indeed.com/*', '*://*.indeed.com/*'],
+    isPostingUrl: (url) => {
+      if (/indeed\.com\/(?:viewjob|m\/viewjob|rc\/clk|pagead\/clk)/i.test(url)) return true;
+      if (/indeed\.com\/jobs?\/view/i.test(url)) return true;
+      try {
+        const u = new URL(url);
+        // Standalone: jk=. Split-pane SERP: vjk= highlights the open detail card.
+        if (u.searchParams.has('jk') || u.searchParams.has('vjk')) return true;
+      } catch {
+        /* ignore */
+      }
+      return false;
+    },
+    isScannableJob: (doc) => indeedDetailLooksLikeJob(doc),
+    resolveJobUrl: (doc, url) => resolveIndeedJobUrl(doc, url),
     extractPageText: (doc = document) =>
       extractBySelectors(doc, [
         '#jobDescriptionText',
         '.jobsearch-JobComponent-description',
         '[data-testid="jobsearch-JobComponent-description"]',
         '.jobsearch-jobDescriptionText',
+        '[data-testid="jobsearch-JobInfoHeader-title"]',
+        '#jobsearch-ViewjobPaneWrapper',
+        '.jobsearch-RightPane',
       ]),
-    notes: 'SPA; description often in #jobDescriptionText. Login walls may hide JD.',
+    notes:
+      'SPA: /viewjob?jk= or /jobs?…&vjk= split pane. Login walls may hide JD. Prefer vjk/jk for cache identity.',
   },
   {
     id: 'linkedin',
@@ -180,12 +202,15 @@ export const BOARDS: readonly Board[] = [
   {
     id: 'dice',
     name: 'Dice',
-    matchPatterns: ['*://*.dice.com/*'],
-    isPostingUrl: (url) => /dice\.com\/job-detail\//i.test(url),
+    matchPatterns: ['*://dice.com/*', '*://*.dice.com/*'],
+    isPostingUrl: (url) =>
+      /dice\.com\/job-detail\//i.test(url) ||
+      /dice\.com\/jobs\/detail\//i.test(url),
     extractPageText: (doc = document) =>
       extractBySelectors(doc, [
         '[data-testid="jobDescriptionHtml"]',
         '#jobDescription',
+        '[class*="job-description"]',
         'article',
         'main',
       ]),
@@ -193,7 +218,7 @@ export const BOARDS: readonly Board[] = [
   {
     id: 'remotive',
     name: 'Remotive',
-    matchPatterns: ['*://*.remotive.com/*', '*://*.remotive.io/*'],
+    matchPatterns: ['*://remotive.com/*', '*://*.remotive.com/*', '*://*.remotive.io/*'],
     isPostingUrl: (url) => {
       try {
         const u = new URL(url);
@@ -208,38 +233,89 @@ export const BOARDS: readonly Board[] = [
         return false;
       }
     },
+    extractPageText: (doc = document) =>
+      extractBySelectors(doc, [
+        '.job',
+        '.content',
+        'article',
+        '[class*="job-description"]',
+        'main',
+      ]),
   },
   {
-    id: 'weworkremotely',
-    name: 'We Work Remotely',
-    matchPatterns: ['*://*.weworkremotely.com/*'],
+    id: 'remoteok',
+    name: 'Remote OK',
+    matchPatterns: ['*://remoteok.com/*', '*://*.remoteok.com/*', '*://remoteok.io/*', '*://*.remoteok.io/*'],
     isPostingUrl: (url) => {
       try {
         const u = new URL(url);
         const parts = u.pathname.split('/').filter(Boolean);
-        // /remote-jobs/{slug} but not /remote-jobs or /remote-jobs/search
+        // /remote-jobs/{slug-id} — not bare /remote-jobs, /remote-jobs/*, feeds, api
+        if (parts[0] !== 'remote-jobs' || parts.length < 2) return false;
+        const slug = parts[1] ?? '';
         return (
-          parts[0] === 'remote-jobs' &&
-          parts.length >= 2 &&
-          parts[1] !== 'search'
+          slug.length > 0 &&
+          !['search', 'api', ''].includes(slug.toLowerCase()) &&
+          !slug.startsWith('?')
         );
       } catch {
         return false;
       }
     },
+    extractPageText: (doc = document) =>
+      extractBySelectors(doc, [
+        '.description',
+        '[class*="description"]',
+        'article',
+        '#job',
+        'main',
+      ]),
+    notes: 'Detail URLs are /remote-jobs/{slug}-{id}; list is /remote-jobs.',
+  },
+  {
+    id: 'weworkremotely',
+    name: 'We Work Remotely',
+    matchPatterns: ['*://weworkremotely.com/*', '*://*.weworkremotely.com/*'],
+    isPostingUrl: (url) => {
+      try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(Boolean);
+        // /remote-jobs/{slug} but not /remote-jobs or /remote-jobs/search
+        // Also /remote-{category}-jobs/{company}/{slug}
+        if (parts[0] === 'remote-jobs') {
+          return parts.length >= 2 && parts[1] !== 'search';
+        }
+        return (
+          /^remote-.+-jobs$/i.test(parts[0] ?? '') &&
+          parts.length >= 3
+        );
+      } catch {
+        return false;
+      }
+    },
+    extractPageText: (doc = document) =>
+      extractBySelectors(doc, [
+        '.listing-container',
+        '#job-listing-show-container',
+        'article',
+        'section.job',
+        'main',
+      ]),
   },
   {
     id: 'monster',
     name: 'Monster',
-    matchPatterns: ['*://*.monster.com/*'],
+    matchPatterns: ['*://monster.com/*', '*://*.monster.com/*'],
     isPostingUrl: (url) =>
       /monster\.com\/job-openings\//i.test(url) ||
-      /monster\.com\/(?:job-openning|jobid)\//i.test(url),
+      /monster\.com\/(?:job-openning|jobid)\//i.test(url) ||
+      /monster\.com\/job\//i.test(url),
     extractPageText: (doc = document) =>
       extractBySelectors(doc, [
         '[data-testid="svx-description-container"]',
         '#JobDescription',
         '.job-description',
+        '[class*="JobDescription"]',
         'article',
         'main',
       ]),
@@ -247,7 +323,7 @@ export const BOARDS: readonly Board[] = [
   {
     id: 'himalayas',
     name: 'Himalayas',
-    matchPatterns: ['*://*.himalayas.app/*'],
+    matchPatterns: ['*://himalayas.app/*', '*://*.himalayas.app/*'],
     isPostingUrl: (url) => {
       try {
         const u = new URL(url);
@@ -261,6 +337,13 @@ export const BOARDS: readonly Board[] = [
         return false;
       }
     },
+    extractPageText: (doc = document) =>
+      extractBySelectors(doc, [
+        '[class*="job-description"]',
+        '[class*="JobDescription"]',
+        'article',
+        'main',
+      ]),
   },
   {
     id: 'workintexas',
@@ -274,12 +357,17 @@ export const BOARDS: readonly Board[] = [
   {
     id: 'wellfound',
     name: 'Wellfound',
-    matchPatterns: ['*://*.wellfound.com/*', '*://*.angel.co/*'],
+    matchPatterns: ['*://wellfound.com/*', '*://*.wellfound.com/*', '*://*.angel.co/*'],
     isPostingUrl: (url) =>
       /wellfound\.com\/(?:jobs|role)\//i.test(url) ||
       /angel\.co\/(?:jobs|company\/.+\/jobs)\//i.test(url),
     extractPageText: (doc = document) =>
-      extractBySelectors(doc, ['[class*="styles_description"]', 'article', 'main']),
+      extractBySelectors(doc, [
+        '[class*="styles_description"]',
+        '[class*="job-description"]',
+        'article',
+        'main',
+      ]),
   },
   {
     id: 'capps',
@@ -491,6 +579,43 @@ function zipDetailLooksLikeJob(doc: Document): boolean {
     /\bapply\b/i.test(lower) ||
     Boolean(pane.querySelector('a[href*="apply"], button, [role="button"]'));
   return hasDescription || hasApply;
+}
+
+function indeedDetailPane(doc: Document): Element | null {
+  return (
+    doc.querySelector('#jobsearch-ViewjobPaneWrapper') ??
+    doc.querySelector('.jobsearch-RightPane') ??
+    doc.querySelector('[class*="JobComponent"]') ??
+    doc.querySelector('#jobDescriptionText')?.closest('section, div') ??
+    null
+  );
+}
+
+function indeedDetailLooksLikeJob(doc: Document): boolean {
+  const desc =
+    doc.querySelector('#jobDescriptionText') ??
+    doc.querySelector('.jobsearch-JobComponent-description') ??
+    doc.querySelector('[data-testid="jobsearch-JobComponent-description"]');
+  if (desc && elementText(desc).length >= 120) return true;
+  const pane = indeedDetailPane(doc);
+  if (!pane) return false;
+  const text = elementText(pane).replace(/\s+/g, ' ');
+  if (text.length < 300) return false;
+  return /job description|responsibilities|qualifications|\bapply\b/i.test(text);
+}
+
+function resolveIndeedJobUrl(_doc: Document, url: string): string {
+  try {
+    const u = new URL(url);
+    const key = u.searchParams.get('jk') || u.searchParams.get('vjk');
+    if (key) {
+      // Canonical standalone URL for bookmarks / cache even when on /jobs?vjk=
+      return `https://${u.hostname}/viewjob?jk=${encodeURIComponent(key)}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return url;
 }
 
 function ldJsonNodes(scriptText: string): unknown[] {

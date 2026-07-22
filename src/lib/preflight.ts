@@ -579,14 +579,19 @@ export function pageTextSignature(pageText: string, cap = 800): string {
 export function listingKeyFromHref(href: string): string {
   try {
     const u = new URL(href);
-    return u.searchParams.get('lk') || u.searchParams.get('jk') || '';
+    return (
+      u.searchParams.get('lk') ||
+      u.searchParams.get('jk') ||
+      u.searchParams.get('vjk') ||
+      ''
+    );
   } catch {
     return '';
   }
 }
 
 /**
- * Cache key for preflight. Prefer listing keys (lk/jk) so SPA card flips
+ * Cache key for preflight. Prefer listing keys (lk/jk/vjk) so SPA card flips
  * do not collide on a sticky canonical /c/.../Job URL from JSON-LD.
  */
 export function preflightCacheKey(args: {

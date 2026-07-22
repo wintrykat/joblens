@@ -26,12 +26,12 @@ function assert(cond: unknown, msg: string): void {
   }
 }
 
-assert(BOARDS.length === 24, `boards ${BOARDS.length}`);
+assert(BOARDS.length === 25, `boards ${BOARDS.length}`);
 const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.4.3', 'manifest version');
+assert(manifest.version === '1.5.0', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');

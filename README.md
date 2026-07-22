@@ -17,9 +17,9 @@ AI-assisted job-posting triage as a personal Chrome extension (Manifest V3). You
 
 ## Supported boards
 
-Built In, ZipRecruiter, Indeed, LinkedIn Jobs, Greenhouse, Lever, Ashby, Workday, Dice, Remotive, We Work Remotely, Monster, Himalayas, WorkInTexas, Wellfound, CAPPS, Robert Half, CyberCoders, USPS, Apple, Google, Meta, Microsoft, Hacker News / YC Jobs.
+Built In, ZipRecruiter, Indeed, LinkedIn Jobs, Greenhouse, Lever, Ashby, Workday, Dice, Remotive, Remote OK, We Work Remotely, Monster, Himalayas, WorkInTexas, Wellfound, CAPPS, Robert Half, CyberCoders, USPS, Apple, Google, Meta, Microsoft, Hacker News / YC Jobs.
 
-The launcher appears on **posting URLs** (not search lists). Add boards in [`src/lib/boards.ts`](src/lib/boards.ts).
+The launcher appears on **posting URLs** (not search lists). Indeed also works on search results when a job is open in the split pane (`vjk=`). Add boards in [`src/lib/boards.ts`](src/lib/boards.ts).
 
 ## Requirements
 

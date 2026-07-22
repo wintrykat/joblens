@@ -126,16 +126,30 @@ describe('preflight', () => {
     ).toBe(true);
   });
 
-  it('listing keys and cache prefer lk over sticky canonical', () => {
+  it('listing keys and cache prefer lk/jk/vjk over sticky canonical', () => {
     expect(
       listingKeyFromHref('https://www.ziprecruiter.com/jobs-search?search=x&lk=abc123')
     ).toBe('abc123');
+    expect(
+      listingKeyFromHref(
+        'https://www.indeed.com/jobs?q=engineer&vjk=d75084593b7d8230'
+      )
+    ).toBe('d75084593b7d8230');
+    expect(
+      listingKeyFromHref('https://www.indeed.com/viewjob?jk=feedkey99')
+    ).toBe('feedkey99');
     expect(
       preflightCacheKey({
         href: 'https://www.ziprecruiter.com/jobs-search?lk=abc123',
         canonicalUrl: 'https://www.ziprecruiter.com/c/Acme/Job/Old',
       })
     ).toBe('lk:abc123');
+    expect(
+      preflightCacheKey({
+        href: 'https://www.indeed.com/jobs?q=x&vjk=vjkAAA',
+        canonicalUrl: 'https://www.indeed.com/viewjob?jk=other',
+      })
+    ).toBe('lk:vjkAAA');
     expect(
       preflightCacheKey({
         href: 'https://www.ziprecruiter.com/jobs-search?lk=abc123',

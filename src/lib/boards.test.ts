@@ -24,6 +24,11 @@ const postingCases: Array<[string, string, boolean]> = [
   ],
   ['ziprecruiter', 'https://www.ziprecruiter.com/jobs-search?q=x', false],
   ['indeed', 'https://www.indeed.com/viewjob?jk=abc', true],
+  [
+    'indeed',
+    'https://www.indeed.com/jobs?q=engineer&l=Austin%2C+TX&vjk=d75084593b7d8230',
+    true,
+  ],
   ['indeed', 'https://www.indeed.com/jobs?q=engineer', false],
   ['linkedin', 'https://www.linkedin.com/jobs/view/123', true],
   ['linkedin', 'https://www.linkedin.com/feed/', false],
@@ -48,8 +53,19 @@ const postingCases: Array<[string, string, boolean]> = [
   ],
   ['remotive', 'https://remotive.com/remote-jobs', false],
   [
+    'remoteok',
+    'https://remoteok.com/remote-jobs/remote-senior-full-stack-engineer-aguru-uk-1104983',
+    true,
+  ],
+  ['remoteok', 'https://remoteok.com/remote-jobs', false],
+  [
     'weworkremotely',
     'https://weworkremotely.com/remote-jobs/acme-senior-engineer',
+    true,
+  ],
+  [
+    'weworkremotely',
+    'https://weworkremotely.com/remote-programming-jobs/acme/senior-engineer',
     true,
   ],
   ['weworkremotely', 'https://weworkremotely.com/remote-jobs', false],
@@ -127,8 +143,8 @@ const postingCases: Array<[string, string, boolean]> = [
 ];
 
 describe('boards', () => {
-  it('registers 24 boards and unique ids', () => {
-    expect(BOARDS).toHaveLength(24);
+  it('registers 25 boards and unique ids', () => {
+    expect(BOARDS).toHaveLength(25);
     const ids = BOARDS.map((b) => b.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -148,10 +164,16 @@ describe('boards', () => {
     expect(shouldShowLauncher(b, url)).toBe(expectPosting);
   });
 
-  it('resolveBoard finds indeed/workday/google', () => {
+  it('resolveBoard finds indeed/workday/google/remoteok', () => {
     expect(resolveBoard('https://www.indeed.com/viewjob?jk=x', 'www.indeed.com')?.id).toBe(
       'indeed'
     );
+    expect(
+      resolveBoard(
+        'https://www.indeed.com/jobs?q=x&vjk=abc123',
+        'www.indeed.com'
+      )?.id
+    ).toBe('indeed');
     expect(
       resolveBoard(
         'https://acme.wd5.myworkdayjobs.com/en-US/External/job/x',
@@ -164,10 +186,16 @@ describe('boards', () => {
         'www.google.com'
       )?.id
     ).toBe('google');
+    expect(
+      resolveBoard(
+        'https://remoteok.com/remote-jobs/remote-python-engineer-acme-1131500',
+        'remoteok.com'
+      )?.id
+    ).toBe('remoteok');
   });
 
-  it('getBoardById and display names', () => {
-    expect(getBoardById('ashby')?.name).toBe('Ashby');
-    expect(boardDisplayNames()).toContain('Ashby');
+  it('lists Remote OK among display names', () => {
+    expect(boardDisplayNames()).toContain('Remote OK');
+    expect(getBoardById('remoteok')?.name).toBe('Remote OK');
   });
 });
