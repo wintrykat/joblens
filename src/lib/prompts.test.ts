@@ -82,5 +82,7 @@ describe('prompts', () => {
     expect(ANALYSIS_SYSTEM).not.toMatch(/Docker\/K8s/);
     expect(PREFLIGHT_SYSTEM).toMatch(/City, ST · Remote/);
     expect(PREFLIGHT_SYSTEM).toMatch(/STATE_A/);
+    expect(PREFLIGHT_SYSTEM).toMatch(/Remote-US/);
+    expect(PREFLIGHT_SYSTEM).toMatch(/INCLUDES every US state/);
   });
 });

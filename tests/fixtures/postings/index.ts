@@ -57,6 +57,20 @@ Denver, CO · Remote
 NOTE: No CO residency required. Open to nationwide candidates. This position is currently remote.
 `.padEnd(400, ' ');
 
+/** UST-shape: Bellevue HQ + Role Location Remote-US (country scope, not a state subset). */
+export const UST_REMOTE_US = `
+Analyst / Junior Developer
+UST
+Bellevue, WA · Remote
+$56,000 - $84,000 a year
+Role description: Analyst / Junior Developer. Gather requirements and develop applications.
+UST provides a reasonable range of compensation for roles that may be hired in various U.S. markets as set forth below.
+Role Location: Remote-US
+Compensation Range: $56,000-$84,000
+Benefits offerings vary in Puerto Rico.
+All US employees who work in a state or locality with more generous paid sick leave will receive those benefits.
+`.padEnd(700, ' ');
+
 /** Quarterly remote travel outside operator radius. */
 export const DFW_QUARTERLY_REMOTE = `
 Sr. Full Stack Developer — Dallas, TX 75019 · Remote

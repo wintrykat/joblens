@@ -7,6 +7,7 @@ import {
   inferWorkModelHint,
   listingKeyFromHref,
   looksUnrestrictedRemoteResidency,
+  looksUsCountryRemoteScope,
   mergePreflightResults,
   preflightCacheKey,
   runLocalPreflight,
@@ -25,6 +26,7 @@ import {
   DENVER_NATIONWIDE,
   DFW_QUARTERLY_REMOTE,
   MADISON_NATIONWIDE,
+  UST_REMOTE_US,
 } from '../../tests/fixtures/postings';
 
 describe('preflight', () => {
@@ -124,6 +126,40 @@ describe('preflight', () => {
         )
       )
     ).toBe(true);
+  });
+
+  it('Remote-US country scope includes TX/PA (UST-shape)', () => {
+    expect(looksUsCountryRemoteScope(UST_REMOTE_US)).toBe(true);
+    expect(looksUnrestrictedRemoteResidency(UST_REMOTE_US)).toBe(true);
+    expect(evaluateRemoteResidency(UST_REMOTE_US, ['TX', 'PA']).verdict).toBe('clear');
+    expect(evaluateRemoteResidency(UST_REMOTE_US, ['TX', 'PA']).reason).toMatch(/US/i);
+
+    const local = runLocalPreflight({
+      cfg: makeConfig({
+        workEligibleRegions: ['TX', 'PA'],
+        preferences: { ...DEFAULT_PREFERENCES, remoteOnly: true },
+      }),
+      pageText: UST_REMOTE_US,
+    });
+    expect(local.verdict).not.toBe('hard_skip');
+    expect(local.flags).toContain('residency_ok');
+
+    const haikuFalseSkip = sanitizeHaikuResidencySkip(
+      {
+        verdict: 'hard_skip',
+        reasons: [
+          'Remote role explicitly restricted to US; candidate residency limited to TX, PA with no intersection',
+          "Role location states 'Remote-US' without explicit permission for all US states",
+        ],
+        sources: ['haiku'],
+        flags: ['residency_excluded'],
+        workModelHint: 'remote',
+      },
+      UST_REMOTE_US,
+      { workEligibleRegions: ['TX', 'PA'], local }
+    );
+    expect(haikuFalseSkip.verdict).toBe('clear');
+    expect(haikuFalseSkip.flags).toContain('residency_ok');
   });
 
   it('listing keys and cache prefer lk/jk/vjk over sticky canonical', () => {

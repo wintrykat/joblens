@@ -72,6 +72,7 @@ export function installChromeMock(initial?: {
       },
     },
     runtime: {
+      id: 'joblens-test',
       get lastError() {
         return state.lastError;
       },

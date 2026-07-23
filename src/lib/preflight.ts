@@ -228,6 +228,32 @@ function normalizeRegionToken(raw: string): string {
   return US_STATE_ALIASES[t] || t.toUpperCase();
 }
 
+const US_STATE_CODES = new Set(Object.values(US_STATE_ALIASES));
+
+function isUsStateCode(code: string): boolean {
+  return US_STATE_CODES.has(code.toUpperCase());
+}
+
+/**
+ * Country-level US remote scope (not a state subset).
+ * "Remote-US", "Role Location: Remote-US", "Remote (US)" — candidate US states are in-scope.
+ */
+export function looksUsCountryRemoteScope(pageText: string): boolean {
+  const t = pageText;
+  if (/\brole\s+location\s*:\s*remote[\s\-–—]*U\.?S\.?A?\b/i.test(t)) return true;
+  if (/\bremote[\s\-–—]*U\.?S\.?A?\b/i.test(t)) return true;
+  if (/\bU\.?S\.?A?[\s\-–—]*remote\b/i.test(t)) return true;
+  if (/\bremote\s*\(\s*U\.?S\.?A?\s*\)/i.test(t)) return true;
+  if (/\b(?:must|should)\s+(?:reside|be\s+(?:based|located))\s+in\s+the\s+(?:US|U\.S\.|United\s+States)\b/i.test(t)) {
+    // Country-only when the same clause doesn't name a US state
+    const clause = t.match(
+      /(?:must|should)\s+(?:reside|be\s+(?:based|located))\s+in\s+the\s+(?:US|U\.?S\.|United\s+States)[^.!\n]{0,80}/i
+    )?.[0];
+    if (clause && extractStateTokens(clause).length === 0) return true;
+  }
+  return false;
+}
+
 function extractStateTokens(chunk: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -337,6 +363,22 @@ export function evaluateRemoteResidency(
         reason: `Posting allows residency in ${states.join(', ')}; overlaps your regions (${regions.join(', ')})`,
         mode: 'include',
         states,
+      };
+    }
+  }
+
+  // Country-level US / nationwide remote: any configured US state is in-scope.
+  if (looksUsCountryRemoteScope(t) || looksUnrestrictedRemoteResidency(t)) {
+    const allUs =
+      regions.length === 0 || regions.every((r) => isUsStateCode(r));
+    if (allUs) {
+      return {
+        verdict: 'clear',
+        reason: looksUsCountryRemoteScope(t)
+          ? 'Remote role scoped to the US; your state residency is within the US'
+          : 'Remote / nationwide — no state residency subset that excludes you',
+        mode: 'none',
+        states: [],
       };
     }
   }
@@ -615,8 +657,9 @@ export function listingFingerprint(args: {
   return `${key}|${title}|${pageTextSignature(args.pageText)}`;
 }
 
-/** Remote with no worker-residency restriction (nationwide / no state residency). */
+/** Remote with no worker-residency restriction (nationwide / US-wide / no state residency). */
 export function looksUnrestrictedRemoteResidency(pageText: string): boolean {
+  if (looksUsCountryRemoteScope(pageText)) return true;
   const t = pageText;
   const unrestricted =
     /\bnationwide\b/i.test(t) ||
@@ -638,7 +681,9 @@ export function looksUnrestrictedRemoteResidency(pageText: string): boolean {
 function looksResidencyHardSkip(result: PreflightResult): boolean {
   if (result.flags.some((f) => /residency|region/i.test(f))) return true;
   return result.reasons.some((r) =>
-    /workEligibleRegions|residency|eligible regions|regions? limited/i.test(r)
+    /workEligibleRegions|residency|eligible regions|regions? limited|Remote-US|intersection|nationwide exception/i.test(
+      r
+    )
   );
 }
 
@@ -697,10 +742,17 @@ export function sanitizeHaikuResidencySkip(
       ...result,
       verdict: 'clear',
       reasons: [
-        'Remote / nationwide — employer city is not a residency limit',
+        looksUsCountryRemoteScope(pageText)
+          ? 'Remote role scoped to the US; your state residency is within the US'
+          : 'Remote / nationwide — employer city is not a residency limit',
         ...result.reasons.map(humanizePreflightReason),
       ].slice(0, 3),
-      flags: result.flags.filter((f) => !/residency|region/i.test(f)),
+      flags: Array.from(
+        new Set([
+          'residency_ok',
+          ...result.flags.filter((f) => !/residency_excluded|region/i.test(f)),
+        ])
+      ),
     };
   }
 

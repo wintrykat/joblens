@@ -5,7 +5,7 @@ import {
   resolveBoard,
   shouldShowLauncher,
 } from '../lib/boards';
-import { openSidePanel, preflightJd } from '../lib/messaging';
+import { openSidePanel, preflightJd, isExtensionContextValid } from '../lib/messaging';
 import { getConfig, hasGeoIntent } from '../lib/storage';
 import type { PreflightMode, PreflightResult, PreflightVerdict } from '../types/domain';
 import {
@@ -197,6 +197,14 @@ function currentListingContext(): {
 }
 
 async function refreshModeFromConfig(): Promise<void> {
+  if (!isExtensionContextValid()) {
+    setUi({
+      ready: false,
+      badge: 'error',
+      reasons: ['JobLens was updated or reloaded — refresh this page to continue.'],
+    });
+    return;
+  }
   try {
     const cfg = await getConfig();
     setUi({
@@ -204,7 +212,13 @@ async function refreshModeFromConfig(): Promise<void> {
       ready: Boolean(cfg.apiKey.trim() && hasGeoIntent(cfg)),
     });
   } catch {
-    setUi({ ready: false });
+    setUi({
+      ready: false,
+      badge: isExtensionContextValid() ? ui.badge : 'error',
+      reasons: isExtensionContextValid()
+        ? ui.reasons
+        : ['JobLens was updated or reloaded — refresh this page to continue.'],
+    });
   }
 }
 
@@ -221,6 +235,13 @@ function readCache(
 }
 
 async function runPreflight(opts: { forceHaiku?: boolean } = {}): Promise<void> {
+  if (!isExtensionContextValid()) {
+    setUi({
+      badge: 'error',
+      reasons: ['JobLens was updated or reloaded — refresh this page to continue.'],
+    });
+    return;
+  }
   if (!shouldShowLauncher(board, location.href, document)) return;
 
   const gen = ++preflightGen;
@@ -275,6 +296,13 @@ function schedulePreflight(): void {
   clearTimeout(preflightDebounce);
   preflightDebounce = setTimeout(() => {
     void (async () => {
+      if (!isExtensionContextValid()) {
+        setUi({
+          badge: 'error',
+          reasons: ['JobLens was updated or reloaded — refresh this page to continue.'],
+        });
+        return;
+      }
       await refreshModeFromConfig();
       if (!shouldShowLauncher(board, location.href, document)) return;
       if (!ui.ready) {
@@ -282,7 +310,14 @@ function schedulePreflight(): void {
         return;
       }
       await runPreflight({ forceHaiku: false });
-    })();
+    })().catch(() => {
+      if (!isExtensionContextValid()) {
+        setUi({
+          badge: 'error',
+          reasons: ['JobLens was updated or reloaded — refresh this page to continue.'],
+        });
+      }
+    });
   }, 500);
 }
 
@@ -365,14 +400,17 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (!isExtensionContextValid()) return;
   if (area !== 'local' || !changes.config) return;
   preflightCache.clear();
   lastListingFp = '';
-  void refreshModeFromConfig().then(() => {
-    if (shouldShowLauncher(board, location.href, document)) {
-      schedulePreflight();
-    }
-  });
+  void refreshModeFromConfig()
+    .then(() => {
+      if (shouldShowLauncher(board, location.href, document)) {
+        schedulePreflight();
+      }
+    })
+    .catch(() => undefined);
 });
 
 syncLauncher();

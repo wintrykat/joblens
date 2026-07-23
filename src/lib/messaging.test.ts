@@ -25,7 +25,16 @@ describe('messaging', () => {
     };
     const res = await analyzeJd({ url: 'https://x', pageText: 'y' });
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/invalidated/i);
+    if (!res.ok) expect(res.error).toMatch(/refresh this page/i);
+  });
+
+  it('catches synchronous invalidated-context throws', async () => {
+    mock.sendMessageImpl = () => {
+      throw new Error('Extension context invalidated.');
+    };
+    const res = await preflightJd({ url: 'https://x', pageText: 'y' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/refresh this page/i);
   });
 
   it('rejects malformed responses', async () => {
