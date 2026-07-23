@@ -57,6 +57,13 @@ const parseLines = (s: string): string[] =>
     .map((x) => x.trim())
     .filter(Boolean);
 
+/** Comma-separated lists (e.g. US states). Parse only on Save — not on each keystroke. */
+const parseCommaList = (s: string): string[] =>
+  s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
 function syncProficienciesFromClaims(claims: SkillClaim[]): string[] {
   return claims.filter((c) => c.standing === 'held' && c.skill.trim()).map((c) => c.skill.trim());
 }
@@ -69,6 +76,7 @@ function Options(): JSX.Element {
   const [deficienciesText, setDeficienciesText] = useState('');
   const [skipTriggersText, setSkipTriggersText] = useState('');
   const [blockedEmployersText, setBlockedEmployersText] = useState('');
+  const [workEligibleRegionsText, setWorkEligibleRegionsText] = useState('');
   const [activeTab, setActiveTab] = useState<OptionsTab>('basics');
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [proposing, setProposing] = useState(false);
@@ -81,6 +89,7 @@ function Options(): JSX.Element {
       setDeficienciesText(c.deficiencies.join('\n'));
       setSkipTriggersText(c.skipTriggers.join('\n'));
       setBlockedEmployersText((c.preferences?.blockedEmployers ?? []).join('\n'));
+      setWorkEligibleRegionsText(c.workEligibleRegions.join(', '));
       setDirty(false);
     });
   }, []);
@@ -236,6 +245,7 @@ function Options(): JSX.Element {
     setDeficienciesText(c.deficiencies.join('\n'));
     setSkipTriggersText(c.skipTriggers.join('\n'));
     setBlockedEmployersText((c.preferences?.blockedEmployers ?? []).join('\n'));
+    setWorkEligibleRegionsText(c.workEligibleRegions.join(', '));
   };
 
   const runProposeFromDocs = async (): Promise<void> => {
@@ -318,6 +328,7 @@ function Options(): JSX.Element {
       model: modelValue,
       deficiencies: parseLines(deficienciesText),
       skipTriggers: parseLines(skipTriggersText),
+      workEligibleRegions: parseCommaList(workEligibleRegionsText),
       skillClaims,
       proficiencies: syncProficienciesFromClaims(skillClaims),
       preferences: {
@@ -331,6 +342,7 @@ function Options(): JSX.Element {
     setDeficienciesText(toSave.deficiencies.join('\n'));
     setSkipTriggersText(toSave.skipTriggers.join('\n'));
     setBlockedEmployersText(toSave.preferences.blockedEmployers.join('\n'));
+    setWorkEligibleRegionsText(toSave.workEligibleRegions.join(', '));
     setDirty(false);
     setStatus('Saved.');
     setTimeout(() => setStatus(''), 2000);
@@ -633,15 +645,13 @@ function Options(): JSX.Element {
           <label>
             Where you can work from for remote roles (comma-separated US states, e.g. CA, NY)
             <input
-              value={cfg.workEligibleRegions.join(', ')}
-              onChange={(e) =>
-                patch({
-                  workEligibleRegions: e.target.value
-                    .split(',')
-                    .map((x) => x.trim())
-                    .filter(Boolean),
-                })
-              }
+              value={workEligibleRegionsText}
+              onChange={(e) => {
+                setWorkEligibleRegionsText(e.target.value);
+                markDirty();
+              }}
+              placeholder="TX, PA"
+              autoComplete="off"
             />
           </label>
           <p className="note">
