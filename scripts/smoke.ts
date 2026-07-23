@@ -35,7 +35,7 @@ const matches = manifest.content_scripts[0]?.matches ?? [];
 for (const p of MATCH_PATTERNS) {
   assert(matches.includes(p), `manifest has ${p}`);
 }
-assert(manifest.version === '1.6.0', 'manifest version');
+assert(manifest.version === '1.6.1', 'manifest version');
 assert(manifest.side_panel?.default_path === 'sidepanel.html', 'side_panel path');
 assert(manifest.permissions?.includes('sidePanel'), 'sidePanel permission');
 assert(!manifest.action?.default_popup, 'no default_popup');
