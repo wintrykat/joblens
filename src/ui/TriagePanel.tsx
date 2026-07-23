@@ -96,7 +96,10 @@ export function TriagePanel({
   return (
     <div className="panel">
       <div className="head">
-        <h1>JobLens{boardName ? ` · ${boardName}` : ''}</h1>
+        <h1>
+          <img className="brand-mark" src="/icons/icon32.png" width={20} height={20} alt="" />
+          JobLens{boardName ? ` · ${boardName}` : ''}
+        </h1>
       </div>
       <div className="body">
         {warningBanner}

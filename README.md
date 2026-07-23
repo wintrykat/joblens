@@ -40,6 +40,9 @@ Load unpacked:
 1. `chrome://extensions` → Developer mode
 2. **Load unpacked** → select `dist/`
 
+Toolbar / store icons live in [`public/icons/`](public/icons/). Regenerate with `npm run icons`.
+Toolbar glyphs are transparent (no white tile) and swap for light/dark color schemes via an offscreen `matchMedia` probe.
+
 Or grab a built zip from [GitHub Releases](https://github.com/wintrykat/joblens/releases): download `joblens-<version>.zip`, unzip, then Load unpacked on that folder. Version bumps on `master` publish a release automatically.
 
 Optional signed pack (local only):

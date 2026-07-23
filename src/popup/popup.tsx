@@ -30,7 +30,10 @@ function Popup(): JSX.Element {
 
   return (
     <div className="pop">
-      <div className="brand">JobLens</div>
+      <div className="brand">
+        <img className="brand-mark" src="/icons/icon32.png" width={18} height={18} alt="" />
+        JobLens
+      </div>
       <button type="button" onClick={() => void scan()}>
         Scan this page
       </button>

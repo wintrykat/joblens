@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  
+  <!-- solid coral lens = guidance/focus, readable at 16px -->
+  <circle cx="52" cy="50" r="26" fill="#FB923C"/>
+  <circle cx="52" cy="50" r="26" stroke="#5EEAD4" stroke-width="16" fill="none"/>
+  <line x1="74" y1="72" x2="104" y2="102" stroke="#5EEAD4" stroke-width="16" stroke-linecap="round"/>
+</svg>

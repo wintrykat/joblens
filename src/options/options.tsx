@@ -338,7 +338,10 @@ function Options(): JSX.Element {
 
   return (
     <div className="wrap">
-      <h1>JobLens settings</h1>
+      <h1 className="page-title">
+        <img className="brand-mark" src="/icons/icon48.png" width={28} height={28} alt="" />
+        JobLens settings
+      </h1>
 
       <section className="import-box">
         <h2>Import documents</h2>

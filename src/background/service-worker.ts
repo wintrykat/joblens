@@ -1,5 +1,8 @@
 import { handleBackgroundRequest } from '../lib/backgroundHandle';
+import { startToolbarIconThemeSync } from '../lib/toolbarIcon';
 import { OpenSidePanelRequestSchema } from '../types/messages';
+
+startToolbarIconThemeSync();
 
 void chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -8,6 +11,14 @@ void chrome.sidePanel
   });
 
 chrome.runtime.onMessage.addListener((msg: unknown, sender, sendResponse) => {
+  if (
+    msg &&
+    typeof msg === 'object' &&
+    (msg as { type?: string }).type === 'joblens.colorScheme'
+  ) {
+    return false;
+  }
+
   const openReq = OpenSidePanelRequestSchema.safeParse(msg);
   if (openReq.success) {
     const tabId = sender.tab?.id;

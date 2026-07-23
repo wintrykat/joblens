@@ -43,7 +43,10 @@ function Bookmarks(): JSX.Element {
 
   return (
     <div className="wrap">
-      <h1>JobLens bookmarks</h1>
+      <h1 className="page-title">
+        <img className="brand-mark" src="/icons/icon48.png" width={28} height={28} alt="" />
+        JobLens bookmarks
+      </h1>
       {items.length === 0 && (
         <section>
           <p className="note">No saved postings yet.</p>
