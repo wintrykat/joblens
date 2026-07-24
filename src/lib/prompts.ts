@@ -348,9 +348,14 @@ Geography / residency (critical — follow exactly):
 - INVERTED exclusions: "not accepting applicants from STATE_A, STATE_B" / "cannot be considered" means those states are FORBIDDEN — candidates in other configured states are permitted. Do NOT hard_skip when the candidate's regions are outside the excluded list.
 - Never treat a city/state that appears only inside an exclusion sentence as the job's work location (a state named only under "not accepting …" is not the posting site).
 - Remote + "nationwide", "open to all US", "Remote-US" / "Role Location: Remote-US", "no [state] residency required", or no residency restriction → clear for residency (even if HQ/city is listed).
-- Country-level US only ("must be based in the US", "Remote-US") INCLUDES every US state. Never hard_skip because the candidate lists TX/PA (or other US states) under a US-wide remote role. US is not a separate region that fails to intersect with states.
+- Country-level US only ("must be based in the US", "Remote-US", "U.S.-based developer/engineer/candidate", "looking for a U.S.-based …") INCLUDES every US state. Never hard_skip because the candidate lists TX/PA (or other US states) under a US-wide remote role. US is not a separate region that fails to intersect with states.
+- "U.S.-based [job title / developer / engineer / candidate]" means the WORKER must be in the US. Do NOT treat that as referring only to clients. "U.S.-based clients" alone is not a worker residency restriction.
+- Multi-country OR allow-lists ("US, Canada or WEU", "based out of US or Canada"): if US is in the list, every US state is allowed. Do not hard_skip when candidate regions are US states under such a list.
 - Listing a city next to Remote ("City, ST · Remote") is NOT a residency restriction by itself.
-- Short mandatory onsite training / onboarding / orientation (days or weeks) with Remote-primary work → Soft under occasionalTravelAllowance when configured; not a commute hard_skip.`;
+- Short mandatory onsite training / onboarding / orientation (days or weeks) with Remote-primary work → Soft under occasionalTravelAllowance when configured; not a commute hard_skip.
+- clearancePolicy "skip": only hard_skip when the posting clearly requires clearance (e.g. "clearance required", "must have Secret clearance"). Never invent clearance. Bare board UI words or unrelated text are not enough. "flag" → soft when required language is present. "ignore" → no clearance gate.
+- Work authorization / citizenship: "Must be a U.S. Citizen" is NOT a residency region gate. If workAuthorizationNote indicates the candidate is a U.S. citizen (e.g. "US citizen, no sponsorship needed"), treat citizenship as satisfied → clear for that gate. Only hard_skip citizenship when the note clearly conflicts (needs sponsorship / not a citizen). If the note is empty, use soft or unknown — never hard_skip on citizenship alone.
+- reasons: plain English only. Never output camelCase field names, snake_case flag ids, or JSON keys (no workEligibleRegions, remoteOnly, clearancePolicy, residency_excluded, etc.). Never say "residency/eligibility gate".`;
 
 export function buildPreflightUser(args: {
   hardGatesJson: string;
@@ -399,7 +404,18 @@ export function buildPreflightHardGates(profile: Config): Record<string, unknown
           ? `Your remote residency is limited to ${regions.join(', ')}`
           : 'No remote residency filter (empty regions)',
       rule:
-        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency such that NONE of the candidate regions are allowed. Inverted exclusion lists PERMIT other states. Nationwide / Remote-US / US-only / no residency required → do not hard_skip (US country scope includes all US states). Do not treat cities named only in exclusion sentences as the job site.',
+        'For remote jobs, hard_skip only when the posting explicitly restricts worker residency such that NONE of the candidate regions are allowed. Inverted exclusion lists PERMIT other states. Nationwide / Remote-US / US-only / U.S.-based [role or candidate] / multi-country OR lists that include US (e.g. US, Canada or WEU) / no residency required → do not hard_skip (US country scope includes all US states). U.S.-based clients alone is not a worker limit. Do not treat cities named only in exclusion sentences as the job site.',
+    },
+    clearanceRule:
+      prefs.clearancePolicy === 'skip'
+        ? 'Required clearance language → hard_skip (never soft). Preferred/able-to-obtain only when clearanceIncludePreferred is true.'
+        : prefs.clearancePolicy === 'flag'
+          ? 'Clearance language → soft concern, not hard_skip.'
+          : 'Ignore clearance language.',
+    workAuthorization: {
+      note: (profile.workAuthorizationNote || '').trim() || null,
+      rule:
+        'U.S. citizenship requirements are work-authorization gates, not residency. If note indicates US citizen → clear citizenship. Hard_skip citizenship only on a clear conflict with the note. Empty note → soft/unknown, not hard_skip.',
     },
     occasionalTravelRule:
       prefs.occasionalTravelAllowance === 'none'

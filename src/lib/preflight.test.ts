@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   allowsOccasionalTravelOutsideRadius,
+  candidateClaimsUsCitizenship,
+  detectClearanceLanguage,
   detectOnsiteTravelCadence,
+  enforceClearancePolicy,
   evaluateRemoteResidency,
+  findCountryAllowClause,
   humanizePreflightReason,
   inferWorkModelHint,
+  listingIdentityFingerprint,
   listingKeyFromHref,
   looksUnrestrictedRemoteResidency,
+  looksUsBasedWorkerRequirement,
   looksUsCountryRemoteScope,
   mergePreflightResults,
+  postingRequiresUsCitizenship,
   preflightCacheKey,
   runLocalPreflight,
+  sanitizeHaikuCitizenshipSkip,
   sanitizeHaikuResidencySkip,
   shouldSkipHaiku,
 } from './preflight';
@@ -22,10 +30,15 @@ import { resolvePostingLocation } from './geo';
 import {
   BOISE_REMOTE_EXCLUDE,
   BOSTON_CHICAGO_QUARTERLY,
+  CLEARANCE_REQUIRED_JD,
+  CLEARANCE_UI_NOISE_JD,
+  CORMAC_US_CITIZEN,
   CUTSFORTH_REMOTE_EXCLUDE,
   DENVER_NATIONWIDE,
   DFW_QUARTERLY_REMOTE,
+  ITBSTAR_US_BASED_DEV,
   MADISON_NATIONWIDE,
+  TURING_US_CANADA_WEU,
   UST_REMOTE_US,
 } from '../../tests/fixtures/postings';
 
@@ -160,6 +173,174 @@ describe('preflight', () => {
     );
     expect(haikuFalseSkip.verdict).toBe('clear');
     expect(haikuFalseSkip.flags).toContain('residency_ok');
+  });
+
+  it('US/Canada/WEU OR-list clears TX/PA (Turing-shape)', () => {
+    const allow = findCountryAllowClause(TURING_US_CANADA_WEU);
+    expect(allow?.countries).toEqual(expect.arrayContaining(['US', 'CA', 'WEU']));
+    expect(looksUsCountryRemoteScope(TURING_US_CANADA_WEU)).toBe(true);
+    expect(evaluateRemoteResidency(TURING_US_CANADA_WEU, ['TX', 'PA']).verdict).toBe('clear');
+
+    const local = runLocalPreflight({
+      cfg: makeConfig({
+        workEligibleRegions: ['TX', 'PA'],
+        preferences: { ...DEFAULT_PREFERENCES, remoteOnly: true },
+      }),
+      pageText: TURING_US_CANADA_WEU,
+    });
+    expect(local.verdict).not.toBe('hard_skip');
+    expect(local.flags).toContain('residency_ok');
+
+    const contradicted = sanitizeHaikuResidencySkip(
+      {
+        verdict: 'hard_skip',
+        reasons: [
+          'Residency restricted to US, Canada, or WEU countries; candidate regions limited to TX, PA (both US states, which are allowed under US scope)',
+        ],
+        sources: ['haiku'],
+        flags: ['residency_excluded'],
+        workModelHint: 'remote',
+      },
+      TURING_US_CANADA_WEU,
+      { workEligibleRegions: ['TX', 'PA'], local }
+    );
+    expect(contradicted.verdict).toBe('clear');
+  });
+
+  it('listing identity ignores page-text growth (scroll-stable)', () => {
+    const base = {
+      href: 'https://www.indeed.com/jobs?q=x&vjk=abc',
+      canonicalUrl: 'https://www.indeed.com/viewjob?jk=abc',
+      paneTitle: 'Software Engineer - Turing',
+    };
+    const a = listingIdentityFingerprint(base);
+    const b = listingIdentityFingerprint(base);
+    expect(a).toBe(b);
+    expect(a.startsWith('lk:abc|')).toBe(true);
+    expect(
+      listingIdentityFingerprint({ ...base, paneTitle: 'Other Role - Acme' })
+    ).not.toBe(a);
+  });
+
+  it('clearance skip policy stays hard_skip (not soft)', () => {
+    const local = runLocalPreflight({
+      cfg: makeConfig({
+        preferences: { ...DEFAULT_PREFERENCES, clearancePolicy: 'skip' },
+      }),
+      pageText: CLEARANCE_REQUIRED_JD,
+    });
+    expect(local.verdict).toBe('hard_skip');
+    expect(local.flags).toContain('clearance');
+
+    const promoted = enforceClearancePolicy(
+      {
+        verdict: 'soft',
+        reasons: ['Clearance language noted'],
+        sources: ['haiku'],
+        flags: ['clearance'],
+      },
+      makeConfig({
+        preferences: { ...DEFAULT_PREFERENCES, clearancePolicy: 'skip' },
+      }),
+      CLEARANCE_REQUIRED_JD
+    );
+    expect(promoted.verdict).toBe('hard_skip');
+  });
+
+  it('U.S.-based developer is worker residency; no phantom clearance (IT-BSTAR)', () => {
+    expect(looksUsBasedWorkerRequirement(ITBSTAR_US_BASED_DEV)).toBe(true);
+    expect(looksUsCountryRemoteScope(ITBSTAR_US_BASED_DEV)).toBe(true);
+    expect(detectClearanceLanguage(ITBSTAR_US_BASED_DEV).hit).toBe(false);
+    expect(detectClearanceLanguage(CLEARANCE_UI_NOISE_JD).hit).toBe(false);
+
+    const local = runLocalPreflight({
+      cfg: makeConfig({
+        workEligibleRegions: ['TX', 'PA'],
+        preferences: {
+          ...DEFAULT_PREFERENCES,
+          remoteOnly: true,
+          clearancePolicy: 'skip',
+        },
+      }),
+      pageText: ITBSTAR_US_BASED_DEV,
+    });
+    expect(local.verdict).not.toBe('hard_skip');
+    expect(local.flags).toContain('residency_ok');
+    expect(local.flags).not.toContain('clearance');
+
+    const haikuPhantom = enforceClearancePolicy(
+      {
+        verdict: 'hard_skip',
+        reasons: [
+          'Clearance required (clearance) — skip policy',
+          "Remote role with no explicit residency restrictions; 'U.S.-based' refers to client base, not worker location limit",
+        ],
+        sources: ['haiku'],
+        flags: ['clearance'],
+        workModelHint: 'remote',
+      },
+      makeConfig({
+        preferences: { ...DEFAULT_PREFERENCES, clearancePolicy: 'skip' },
+      }),
+      ITBSTAR_US_BASED_DEV
+    );
+    expect(haikuPhantom.verdict).not.toBe('hard_skip');
+    expect(haikuPhantom.flags).not.toContain('clearance');
+
+    const residency = evaluateRemoteResidency(ITBSTAR_US_BASED_DEV, ['TX', 'PA']);
+    expect(residency.verdict).toBe('clear');
+  });
+
+  it('U.S. citizen requirement clears when work-auth note says US citizen', () => {
+    expect(postingRequiresUsCitizenship(CORMAC_US_CITIZEN)).toBe(true);
+    expect(candidateClaimsUsCitizenship('US citizen, no sponsorship needed')).toBe(true);
+    expect(candidateClaimsUsCitizenship('')).toBe(false);
+
+    const cleared = sanitizeHaikuCitizenshipSkip(
+      {
+        verdict: 'hard_skip',
+        reasons: [
+          'U.S. Citizen requirement is a residency/eligibility gate that may exclude candidate',
+        ],
+        sources: ['haiku'],
+        flags: [],
+      },
+      CORMAC_US_CITIZEN,
+      'US citizen, no sponsorship needed'
+    );
+    expect(cleared.verdict).toBe('clear');
+    expect(cleared.flags).toContain('citizenship_ok');
+
+    const hedged = sanitizeHaikuCitizenshipSkip(
+      {
+        verdict: 'hard_skip',
+        reasons: [
+          'U.S. Citizen requirement is a residency/eligibility gate that may exclude candidate',
+        ],
+        sources: ['haiku'],
+        flags: [],
+      },
+      CORMAC_US_CITIZEN,
+      ''
+    );
+    expect(hedged.verdict).toBe('soft');
+
+    expect(
+      humanizePreflightReason(
+        'U.S. Citizen requirement is a residency/eligibility gate that may exclude candidate'
+      )
+    ).not.toMatch(/eligibility gate/i);
+  });
+
+  it('humanize strips field and flag names from reasons', () => {
+    expect(humanizePreflightReason('workEligibleRegions limited to TX')).toMatch(
+      /your remote residency regions/i
+    );
+    expect(humanizePreflightReason('remoteOnly: posting looks onsite')).toMatch(
+      /remote-only preference/i
+    );
+    expect(humanizePreflightReason('flag: residency_excluded')).not.toMatch(/residency_excluded/);
+    expect(humanizePreflightReason('clearancePolicy skip hit')).toMatch(/clearance policy/i);
   });
 
   it('listing keys and cache prefer lk/jk/vjk over sticky canonical', () => {

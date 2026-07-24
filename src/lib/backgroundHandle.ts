@@ -24,6 +24,8 @@ import {
   shouldSkipHaiku,
   truncateForPreflight,
   sanitizeHaikuResidencySkip,
+  sanitizeHaikuCitizenshipSkip,
+  enforceClearancePolicy,
   humanizePreflightReasons,
 } from './preflight';
 import { PREFLIGHT_CLAUDE_MODEL } from './settingsOptions';
@@ -147,10 +149,16 @@ export async function handleBackgroundRequest(raw: unknown): Promise<BackgroundH
       local,
       workEligibleRegions: cfg.workEligibleRegions,
     });
+    const citizenshipOk = sanitizeHaikuCitizenshipSkip(
+      sanitized,
+      msg.pageText || '',
+      cfg.workAuthorizationNote || ''
+    );
+    const enforced = enforceClearancePolicy(citizenshipOk, cfg, msg.pageText || '');
     return {
       preflight: {
-        ...sanitized,
-        reasons: humanizePreflightReasons(sanitized.reasons),
+        ...enforced,
+        reasons: humanizePreflightReasons(enforced.reasons),
       },
     };
   }

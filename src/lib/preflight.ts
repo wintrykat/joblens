@@ -234,9 +234,85 @@ function isUsStateCode(code: string): boolean {
   return US_STATE_CODES.has(code.toUpperCase());
 }
 
+/** Country-level allow tokens used in multi-country residency lists. */
+export type AllowedCountry = 'US' | 'CA' | 'UK' | 'WEU' | 'EU';
+
+/**
+ * Parse country allow-list chunks like "US, Canada or WEU countries (UK, …)".
+ * Does not treat bare "CA" as Canada (that's California as a US state).
+ */
+export function extractAllowedCountries(chunk: string): AllowedCountry[] {
+  const out: AllowedCountry[] = [];
+  const seen = new Set<AllowedCountry>();
+  const push = (c: AllowedCountry): void => {
+    if (!seen.has(c)) {
+      seen.add(c);
+      out.push(c);
+    }
+  };
+  if (/\b(?:United\s+States|U\.?\s*S\.?\s*A?\.?)\b/i.test(chunk) || /\bUS\b/.test(chunk)) {
+    push('US');
+  }
+  if (/\bCanada\b/i.test(chunk)) push('CA');
+  if (/\b(?:United\s+Kingdom|U\.?\s*K\.?|Britain|England)\b/i.test(chunk) || /\bUK\b/.test(chunk)) {
+    push('UK');
+  }
+  if (/\bWEU\b|\bWestern\s+Europe(?:an)?\b/i.test(chunk)) push('WEU');
+  if (/\b(?:\bEU\b|European\s+Union)\b/i.test(chunk)) push('EU');
+  return out;
+}
+
+/** True when any candidate region is covered by a country in the allow-list (OR semantics). */
+export function regionsMatchCountryAllowList(
+  regions: readonly string[],
+  countries: readonly AllowedCountry[]
+): boolean {
+  if (!countries.length) return false;
+  if (!regions.length) return false;
+  const normalized = regions.map(normalizeRegionToken).filter(Boolean);
+  if (countries.includes('US') && normalized.some((r) => isUsStateCode(r))) return true;
+  // Future: map CA/UK regions if candidates store countries; US states are the common case.
+  return false;
+}
+
+/**
+ * Find an explicit multi-country / country residency allow clause on the page.
+ * Examples: "based out of US, Canada or WEU", "must be located in the US or Canada".
+ */
+export function findCountryAllowClause(pageText: string): {
+  clause: string;
+  countries: AllowedCountry[];
+} | null {
+  const patterns = [
+    /(?:candidates?\s+must\s+be\s+|must\s+be\s+|should\s+be\s+)?(?:based|located|reside)\s+(?:out\s+of|in)\s+([^.!\n]{8,200})/gi,
+    /(?:location|residency|work\s+location)\s*:\s*((?:remote[\s\-–—]*)?(?:US|U\.S\.|United\s+States|Canada|WEU|UK)[^.!\n]{0,160})/gi,
+  ];
+  for (const re of patterns) {
+    for (const m of pageText.matchAll(re)) {
+      const clause = (m[1] || m[0] || '').trim();
+      if (!clause) continue;
+      const countries = extractAllowedCountries(clause);
+      // Need at least one country token; prefer multi-country OR US-with-peers
+      if (countries.length >= 1) {
+        // Skip pure US-state include lists without country wording
+        if (
+          countries.length === 1 &&
+          countries[0] === 'US' &&
+          !/\b(?:US|U\.S\.|United\s+States|Canada|WEU|UK|country|countries)\b/i.test(clause)
+        ) {
+          continue;
+        }
+        return { clause, countries };
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Country-level US remote scope (not a state subset).
- * "Remote-US", "Role Location: Remote-US", "Remote (US)" — candidate US states are in-scope.
+ * "Remote-US", "Role Location: Remote-US", "Remote (US)", "U.S.-based developer" —
+ * candidate US states are in-scope.
  */
 export function looksUsCountryRemoteScope(pageText: string): boolean {
   const t = pageText;
@@ -244,12 +320,52 @@ export function looksUsCountryRemoteScope(pageText: string): boolean {
   if (/\bremote[\s\-–—]*U\.?S\.?A?\b/i.test(t)) return true;
   if (/\bU\.?S\.?A?[\s\-–—]*remote\b/i.test(t)) return true;
   if (/\bremote\s*\(\s*U\.?S\.?A?\s*\)/i.test(t)) return true;
+  if (looksUsBasedWorkerRequirement(t)) return true;
   if (/\b(?:must|should)\s+(?:reside|be\s+(?:based|located))\s+in\s+the\s+(?:US|U\.S\.|United\s+States)\b/i.test(t)) {
     // Country-only when the same clause doesn't name a US state
     const clause = t.match(
       /(?:must|should)\s+(?:reside|be\s+(?:based|located))\s+in\s+the\s+(?:US|U\.?S\.|United\s+States)[^.!\n]{0,80}/i
     )?.[0];
     if (clause && extractStateTokens(clause).length === 0) return true;
+  }
+  const allow = findCountryAllowClause(t);
+  if (allow && allow.countries.includes('US') && allow.countries.length >= 1) {
+    // Multi-country OR-list that includes US, or US-only country clause
+    return true;
+  }
+  return false;
+}
+
+/**
+ * "U.S.-based [role/candidate]" means the worker must live in the US.
+ * "U.S.-based clients" alone does not.
+ */
+export function looksUsBasedWorkerRequirement(pageText: string): boolean {
+  const t = pageText;
+  // Strip client-only phrases so they don't confuse nearby worker matches
+  const withoutClients = t.replace(
+    /\bU\.?\s*S\.?-?\s*based\s+clients?\b/gi,
+    ' '
+  );
+  if (
+    /\b(?:looking\s+for|seeking|hiring|need(?:s|ed)?)\s+(?:an?\s+)?U\.?\s*S\.?-?\s*based\b/i.test(
+      withoutClients
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bU\.?\s*S\.?-?\s*based\s+(?:\w+[\/-]?\s*){0,5}(?:developer|engineer|programmer|designer|analyst|architect|candidate|applicant|contractor|employee|worker|specialist|consultant)\b/i.test(
+      withoutClients
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:must|should)\s+be\s+U\.?\s*S\.?-?\s*based\b/i.test(withoutClients) ||
+    /\bU\.?\s*S\.?-?\s*based\s+(?:candidates?|applicants?|only)\b/i.test(withoutClients)
+  ) {
+    return true;
   }
   return false;
 }
@@ -335,10 +451,35 @@ export function evaluateRemoteResidency(
     }
   }
 
+  // Multi-country allow lists (OR): "US, Canada or WEU" — US states satisfy US.
+  const countryAllow = findCountryAllowClause(t);
+  if (countryAllow && regionsMatchCountryAllowList(regions, countryAllow.countries)) {
+    const labels = countryAllow.countries.join('/');
+    return {
+      verdict: 'clear',
+      reason: `Posting allows residency in ${labels}; your regions (${regions.join(', ')}) are covered`,
+      mode: 'include',
+      states: [],
+    };
+  }
+  if (countryAllow && countryAllow.countries.includes('US') && regions.length === 0) {
+    return {
+      verdict: 'unknown',
+      reason: `Posting limits residency to ${countryAllow.countries.join('/')}; no candidate regions configured`,
+      mode: 'include',
+      states: [],
+    };
+  }
+
   const includeMatch = t.match(
-    /(?:must\s+reside\s+in|candidates?\s+(?:must\s+be\s+)?(?:located|based)\s+in|only\s+(?:hiring|accepting)\s+(?:from|in)|open\s+(?:only\s+)?to\s+(?:candidates\s+in|residents\s+of))[^.!\n]{0,160}/i
+    /(?:must\s+reside\s+in|candidates?\s+(?:must\s+be\s+)?(?:located|based)\s+(?:out\s+of|in)|only\s+(?:hiring|accepting)\s+(?:from|in)|open\s+(?:only\s+)?to\s+(?:candidates\s+in|residents\s+of)|(?:location|residency)\s*:\s*(?:candidates?\s+must\s+be\s+)?(?:based|located)\s+(?:out\s+of|in))[^.!\n]{0,200}/i
   );
-  if (includeMatch?.[0] && !/\bunited\s+states\b|\bU\.?S\.?\b|\bnationwide\b/i.test(includeMatch[0])) {
+  if (
+    includeMatch?.[0] &&
+    !/\bunited\s+states\b|\bU\.?S\.?\b|\bnationwide\b|\bcanada\b|\bWEU\b|\bUK\b/i.test(
+      includeMatch[0]
+    )
+  ) {
     const states = extractStateTokens(includeMatch[0]);
     if (states.length) {
       if (regions.length === 0) {
@@ -426,6 +567,134 @@ export function needsSemanticPreflight(cfg: Config): boolean {
   return false;
 }
 
+const CLEARANCE_REQUIRED_RE =
+  /\b(?:(?:active|current|existing)\s+)?(?:security\s+)?clearance\s+(?:required|needed|mandatory)\b|\b(?:must|requires?|need(?:s|ed)?)\s+(?:an?\s+)?(?:active\s+)?(?:security\s+)?clearance\b|\brequires?\s+(?:an?\s+)?(?:active\s+)?(?:secret|top\s+secret|ts\/?sci|public\s+trust)\b|\b(?:top\s+secret|secret|ts\/?sci|public\s+trust)\s+clearance\b|\b(?:active|current)\s+(?:top\s+secret|secret|ts\/?sci)\s+clearance\b|\b(?:active|current)\s+(?:top\s+secret|secret|ts\/?sci)\b|\b(?:dod|doe)\s+(?:security\s+)?clearance\b/i;
+
+const CLEARANCE_PREFERRED_RE =
+  /\b(?:security\s+)?clearance\s+(?:preferred|desired|a\s+plus|nice\s+to\s+have)\b|\b(?:preferred|desired)\s+(?:security\s+)?clearance\b|\b(?:able|willingness|willing)\s+to\s+(?:obtain|get|acquire)\s+(?:a\s+)?(?:security\s+)?clearance\b|\bclearance\s+(?:eligible|eligibility)\b/i;
+
+/**
+ * Detect clearance language for local preflight + policy enforcement.
+ * Bare "clearance" / board UI chrome is NOT enough — require required/preferred phrasing.
+ */
+export function detectClearanceLanguage(
+  pageText: string,
+  opts?: { includePreferred?: boolean }
+): { hit: boolean; preferredOnly: boolean; snippet: string } {
+  const t = pageText;
+  if (CLEARANCE_REQUIRED_RE.test(t)) {
+    const m = t.match(CLEARANCE_REQUIRED_RE);
+    return { hit: true, preferredOnly: false, snippet: (m?.[0] || 'clearance required').trim() };
+  }
+  const preferred = CLEARANCE_PREFERRED_RE.test(t);
+  if (preferred) {
+    const m = t.match(CLEARANCE_PREFERRED_RE);
+    const snippet = (m?.[0] || 'clearance preferred').trim();
+    if (opts?.includePreferred) {
+      return { hit: true, preferredOnly: true, snippet };
+    }
+    return { hit: false, preferredOnly: true, snippet };
+  }
+  return { hit: false, preferredOnly: false, snippet: '' };
+}
+
+/**
+ * Local clearance gate. skip → hard_skip; flag → soft.
+ * Respects clearanceSkipUntil for "able to obtain" when date is in the future.
+ */
+export function evaluateClearanceGate(cfg: Config, pageText: string): PreflightResult | null {
+  const policy = cfg.preferences.clearancePolicy;
+  if (policy === 'ignore') return null;
+
+  const includePreferred = cfg.preferences.clearanceIncludePreferred;
+  const detected = detectClearanceLanguage(pageText, { includePreferred });
+  if (!detected.hit) return null;
+
+  const skipUntil = (cfg.preferences.clearanceSkipUntil || '').trim();
+  if (skipUntil && detected.preferredOnly) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today >= skipUntil && !includePreferred) return null;
+  }
+
+  if (policy === 'skip') {
+    return emptyResult(
+      'hard_skip',
+      [
+        detected.preferredOnly
+          ? `Clearance preferred / obtainable (${detected.snippet}) — skip policy`
+          : `Clearance required (${detected.snippet}) — skip policy`,
+      ],
+      { flags: ['clearance'] }
+    );
+  }
+
+  return emptyResult(
+    'soft',
+    [
+      detected.preferredOnly
+        ? `Clearance preferred / obtainable noted (${detected.snippet})`
+        : `Clearance language noted (${detected.snippet})`,
+    ],
+    { flags: ['clearance'] }
+  );
+}
+
+/**
+ * Promote soft clearance to hard_skip only when local text confirms clearance
+ * and policy is skip. Never promote Haiku-invented clearance with no JD evidence.
+ * Strip unverified Haiku clearance flags/reasons.
+ */
+export function enforceClearancePolicy(
+  result: PreflightResult,
+  cfg: Config,
+  pageText: string
+): PreflightResult {
+  const policy = cfg.preferences.clearancePolicy;
+  const detected = detectClearanceLanguage(pageText, {
+    includePreferred: cfg.preferences.clearanceIncludePreferred,
+  });
+
+  if (!detected.hit) {
+    const claimedClearance =
+      result.flags.some((f) => /clearance/i.test(f)) ||
+      result.reasons.some((r) => /\bclearance\b/i.test(r));
+    if (!claimedClearance) return result;
+
+    const cleanedReasons = result.reasons.filter((r) => !/\bclearance\b/i.test(r));
+    const cleanedFlags = result.flags.filter((f) => !/clearance/i.test(f));
+    const otherHard = cleanedFlags.some((f) =>
+      /blocked|remote_only|geo_excluded|residency_excluded|skip_category|perm|shell/i.test(f)
+    );
+    // Drop invented clearance; demote hard_skip when clearance was the only gate
+    if (result.verdict === 'hard_skip' && !otherHard) {
+      return {
+        ...result,
+        verdict: cleanedReasons.length ? 'soft' : 'clear',
+        reasons: cleanedReasons.length
+          ? cleanedReasons
+          : ['No clearance requirement found on posting'],
+        flags: cleanedFlags,
+        sources: Array.from(new Set([...result.sources, 'local'])),
+      };
+    }
+    return { ...result, reasons: cleanedReasons, flags: cleanedFlags };
+  }
+
+  if (policy !== 'skip') return result;
+  if (result.verdict === 'hard_skip' && result.flags.includes('clearance')) return result;
+
+  return {
+    ...result,
+    verdict: 'hard_skip',
+    reasons: [
+      `Clearance required (${detected.snippet}) — skip policy`,
+      ...result.reasons.filter((r) => !/\bclearance\b/i.test(r)),
+    ].slice(0, 3),
+    flags: Array.from(new Set([...result.flags, 'clearance'])),
+    sources: Array.from(new Set([...result.sources, 'local'])),
+  };
+}
+
 function emptyResult(
   verdict: PreflightVerdict,
   reasons: string[],
@@ -468,9 +737,14 @@ export function runLocalPreflight(args: {
   if (cfg.preferences.remoteOnly && (workModelHint === 'onsite' || workModelHint === 'hybrid')) {
     return emptyResult(
       'hard_skip',
-      [`remoteOnly: posting looks ${workModelHint}`],
+      [`Remote-only preference: posting looks ${workModelHint}`],
       { workModelHint, flags: ['remote_only'] }
     );
+  }
+
+  const clearance = evaluateClearanceGate(cfg, pageText);
+  if (clearance) {
+    return clearance;
   }
 
   const residency = evaluateRemoteResidency(pageText, cfg.workEligibleRegions);
@@ -652,9 +926,22 @@ export function listingFingerprint(args: {
   paneTitle: string;
   pageText: string;
 }): string {
+  // Include text signature for cache/debug; SPA change detection should use identity only.
+  return `${listingIdentityFingerprint(args)}|${pageTextSignature(args.pageText)}`;
+}
+
+/**
+ * Identity-only fingerprint for SPA change detection (Indeed/Zip card flips).
+ * Excludes page-text signature so lazy-loaded JD growth / scroll mutations do not re-run preflight.
+ */
+export function listingIdentityFingerprint(args: {
+  href: string;
+  canonicalUrl: string;
+  paneTitle: string;
+}): string {
   const key = preflightCacheKey(args);
   const title = args.paneTitle.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 120);
-  return `${key}|${title}|${pageTextSignature(args.pageText)}`;
+  return `${key}|${title}`;
 }
 
 /** Remote with no worker-residency restriction (nationwide / US-wide / no state residency). */
@@ -681,7 +968,16 @@ export function looksUnrestrictedRemoteResidency(pageText: string): boolean {
 function looksResidencyHardSkip(result: PreflightResult): boolean {
   if (result.flags.some((f) => /residency|region/i.test(f))) return true;
   return result.reasons.some((r) =>
-    /workEligibleRegions|residency|eligible regions|regions? limited|Remote-US|intersection|nationwide exception/i.test(
+    /workEligibleRegions|residency|eligible regions|regions? limited|Remote-US|intersection|nationwide exception|WEU|Canada/i.test(
+      r
+    )
+  );
+}
+
+/** Haiku admitted the candidate regions are allowed — do not keep hard_skip. */
+function haikuAdmitsResidencyAllowed(result: PreflightResult): boolean {
+  return result.reasons.some((r) =>
+    /\bare allowed\b|\bunder US scope\b|\bwithin the US\b|\bwithin US\b|\bare permitted\b|\bare covered\b|\bincludes? (?:all )?US states\b/i.test(
       r
     )
   );
@@ -704,15 +1000,23 @@ export function sanitizeHaikuResidencySkip(
 
   const local = opts?.local;
 
-  if (local?.flags.includes('residency_ok')) {
+  if (local?.flags.includes('residency_ok') || haikuAdmitsResidencyAllowed(result)) {
     return {
       ...result,
-      verdict: local.verdict === 'soft' ? 'soft' : 'clear',
+      verdict: local?.verdict === 'soft' ? 'soft' : 'clear',
       reasons: [
-        ...(local.reasons.length ? local.reasons : ['Residency permitted for your regions']),
+        ...(local?.reasons.length
+          ? local.reasons
+          : haikuAdmitsResidencyAllowed(result)
+            ? ['Your regions are allowed under the posting residency rules']
+            : ['Residency permitted for your regions']),
       ].slice(0, 3),
       flags: Array.from(
-        new Set([...local.flags, ...result.flags.filter((f) => !/residency_excluded|region/i.test(f))])
+        new Set([
+          'residency_ok',
+          ...(local?.flags ?? []),
+          ...result.flags.filter((f) => !/residency_excluded|region/i.test(f)),
+        ])
       ),
       sources: Array.from(new Set([...result.sources, 'local'])),
     };
@@ -759,15 +1063,156 @@ export function sanitizeHaikuResidencySkip(
   return result;
 }
 
+const US_CITIZEN_NOTE_RE =
+  /\b(?:U\.?\s*S\.?\.?\s*|United\s+States\s+|American\s+)?citizen(?:ship)?\b|\bUS\s+citizen\b/i;
+
+const NEEDS_SPONSORSHIP_NOTE_RE =
+  /\b(?:need(?:s|ed)?|require(?:s|d)?|seeking)\s+(?:visa\s+)?sponsorship\b|\bnot\s+a\s+(?:U\.?\s*S\.?\.?\s*)?citizen\b|\bH-?1B\b|\bEAD\b|\bgreen\s+card\s+pending\b/i;
+
+const POSTING_US_CITIZEN_REQUIRED_RE =
+  /\b(?:must\s+be\s+(?:a\s+)?U\.?\s*S\.?\.?\s*citizen|U\.?\s*S\.?\.?\s*citizenship\s+(?:required|mandatory|needed)|only\s+U\.?\s*S\.?\.?\s*citizens?\s+(?:may|can|will)|requires?\s+U\.?\s*S\.?\.?\s*citizenship)\b/i;
+
+/** Candidate work-auth note indicates US citizenship. */
+export function candidateClaimsUsCitizenship(note: string): boolean {
+  const n = note.trim();
+  if (!n) return false;
+  if (NEEDS_SPONSORSHIP_NOTE_RE.test(n) && !US_CITIZEN_NOTE_RE.test(n)) return false;
+  return US_CITIZEN_NOTE_RE.test(n);
+}
+
+/** Posting explicitly requires US citizenship (not merely US-based / work auth). */
+export function postingRequiresUsCitizenship(pageText: string): boolean {
+  return POSTING_US_CITIZEN_REQUIRED_RE.test(pageText);
+}
+
+function looksCitizenshipHardSkip(result: PreflightResult): boolean {
+  if (result.flags.some((f) => /citizen|work_?auth|authorization/i.test(f))) return true;
+  return result.reasons.some((r) =>
+    /\bcitizen|\bcitizenship\b|work\s+auth|eligibility\s+gate|may exclude candidate/i.test(r)
+  );
+}
+
+/**
+ * Demote Haiku hard_skips on US citizenship when the candidate note says US citizen,
+ * or when the model hedges without a clear conflict ("may exclude").
+ * Citizenship ≠ residency — do not treat citizen requirements as region gates.
+ */
+export function sanitizeHaikuCitizenshipSkip(
+  result: PreflightResult,
+  pageText: string,
+  workAuthorizationNote: string
+): PreflightResult {
+  if (result.verdict !== 'hard_skip') return result;
+  if (!result.sources.includes('haiku')) return result;
+  if (!looksCitizenshipHardSkip(result)) return result;
+
+  // Sticky local hard gates (blocked employer, etc.) — leave alone if not citizenship-shaped
+  if (
+    result.sources.includes('local') &&
+    result.flags.some((f) =>
+      /blocked|remote_only|geo_excluded|residency_excluded|clearance|perm|shell|skip_category/i.test(f)
+    ) &&
+    !result.reasons.some((r) => /\bcitizen|\bcitizenship\b/i.test(r))
+  ) {
+    return result;
+  }
+
+  const requiresCitizen = postingRequiresUsCitizenship(pageText);
+  const isCitizen = candidateClaimsUsCitizenship(workAuthorizationNote);
+
+  if (requiresCitizen && isCitizen) {
+    return {
+      ...result,
+      verdict: 'clear',
+      reasons: ['Posting requires U.S. citizenship; your work authorization note matches'],
+      flags: Array.from(
+        new Set([
+          'citizenship_ok',
+          ...result.flags.filter((f) => !/citizen|work_?auth|eligibility/i.test(f)),
+        ])
+      ),
+      sources: Array.from(new Set([...result.sources, 'local'])),
+    };
+  }
+
+  // Hedge / invented exclusion without configured conflict → not a hard_skip
+  const hedges =
+    result.reasons.some((r) => /\bmay exclude\b|\bmight exclude\b|\bcould exclude\b/i.test(r)) ||
+    (!workAuthorizationNote.trim() && requiresCitizen);
+
+  if (hedges || (requiresCitizen && !workAuthorizationNote.trim())) {
+    return {
+      ...result,
+      verdict: 'soft',
+      reasons: [
+        requiresCitizen && !workAuthorizationNote.trim()
+          ? 'Posting requires U.S. citizenship; add a work authorization note to confirm fit'
+          : 'U.S. citizenship is required — confirm against your work authorization note',
+        ...result.reasons
+          .filter((r) => !/\bmay exclude\b|\beligibility gate\b/i.test(r))
+          .map(humanizePreflightReason),
+      ].slice(0, 3),
+      flags: Array.from(
+        new Set([
+          ...result.flags.filter((f) => !/citizen|eligibility/i.test(f)),
+          'citizenship_unverified',
+        ])
+      ),
+      sources: Array.from(new Set([...result.sources, 'local'])),
+    };
+  }
+
+  return result;
+}
+
+const FIELD_NAME_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\bworkEligibleRegions\b/g, 'your remote residency regions'],
+  [/\bcandidateRemoteResidency\b/g, 'your remote residency regions'],
+  [/\bremoteOnly\b/g, 'remote-only preference'],
+  [/\bblockedEmployers\b/g, 'blocked employers'],
+  [/\bflagPermNotices\b/g, 'PERM notices'],
+  [/\bflagShellEmployers\b/g, 'shell employers'],
+  [/\bclearancePolicy\b/g, 'clearance policy'],
+  [/\bclearanceIncludePreferred\b/g, 'preferred-clearance setting'],
+  [/\bclearanceSkipUntil\b/g, 'clearance skip-until date'],
+  [/\boccasionalTravelAllowance\b/g, 'occasional travel allowance'],
+  [/\broleSkipCategories\b/g, 'role skip categories'],
+  [/\bcompensationMinUsd\b/g, 'minimum pay'],
+  [/\bcompensationMaxUsd\b/g, 'maximum pay'],
+  [/\bminContractMonths\b/g, 'minimum contract length'],
+  [/\bLOCAL_PREFLIGHT\b/g, 'local check'],
+  [/\bHARD_GATES\b/g, 'hard gates'],
+  [/\bresidency_excluded\b/g, 'residency not matching your regions'],
+  [/\bresidency_ok\b/g, 'residency OK'],
+  [/\bgeo_excluded\b/g, 'outside your commute radius'],
+  [/\bblocked_employer\b/g, 'blocked employer'],
+  [/\bremote_only\b/g, 'remote-only'],
+  [/\bskip_category\b/g, 'skip category'],
+  [/\bworkAuthorizationNote\b/g, 'work authorization note'],
+  [/\beligibility\s*\/?\s*gate\b/gi, 'eligibility check'],
+  [/\bresidency\/eligibility gate\b/gi, 'eligibility check'],
+];
+
 /** Make preflight reasons readable in the launcher badge. */
 export function humanizePreflightReason(reason: string): string {
-  return reason
-    .replace(/\bworkEligibleRegions\b/g, 'your remote residency regions')
-    .replace(/\bcandidateRemoteResidency\b/g, 'your remote residency regions')
-    .replace(/\bremoteOnly\b/g, 'remote-only preference')
-    .replace(/\bblockedEmployers\b/g, 'blocked employers')
-    .replace(/\bflagPermNotices\b/g, 'PERM notices')
-    .replace(/\bflagShellEmployers\b/g, 'shell employers');
+  let out = reason
+    .replace(/\bresidency\/eligibility gate\b/gi, 'eligibility check')
+    .replace(/\beligibility gate\b/gi, 'eligibility check')
+    .replace(/\bmay exclude candidate\b/gi, 'might not match your profile');
+  for (const [re, label] of FIELD_NAME_REPLACEMENTS) {
+    out = out.replace(re, label);
+  }
+  // Strip leftover camelCase identifiers that leaked from model output
+  out = out.replace(/\b([a-z]+[A-Z][a-zA-Z0-9]*)\b/g, (m) => {
+    if (m.length < 4) return m;
+    return m
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/_/g, ' ')
+      .toLowerCase();
+  });
+  // snake_case machine ids
+  out = out.replace(/\b([a-z]+_[a-z0-9_]+)\b/g, (m) => m.replace(/_/g, ' '));
+  return out.replace(/\s{2,}/g, ' ').trim();
 }
 
 export function humanizePreflightReasons(reasons: readonly string[]): string[] {

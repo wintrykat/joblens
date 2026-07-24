@@ -71,6 +71,59 @@ Benefits offerings vary in Puerto Rico.
 All US employees who work in a state or locality with more generous paid sick leave will receive those benefits.
 `.padEnd(700, ' ');
 
+/** Turing-shape: multi-country OR list US/Canada/WEU — US states must clear. */
+export const TURING_US_CANADA_WEU = `
+Software Engineer — Turing
+Remote
+$200 - $300 an hour - Contract
+Based in San Francisco, California, Turing is the world's leading research accelerator.
+Location: Candidates must be based out of US, Canada or WEU countries (UK, Netherlands, Italy, Germany, …)
+Engagement: flexible, minimum 10 hrs/week. Contractor.
+Job description: Software Engineering evaluator creating datasets for LLMs in Python, JavaScript, C/C++, Java, Rust, and Go.
+`.padEnd(700, ' ');
+
+/** Clearance required — for skip-policy hard_skip tests. */
+export const CLEARANCE_REQUIRED_JD = `
+Senior Engineer — DefenseCo
+Reston, VA · Hybrid
+Active Secret clearance required. Must have current DoD security clearance.
+Job description: build secure systems for federal clients.
+`.padEnd(500, ' ');
+
+/** IT-BSTAR-shape: U.S.-based developer (worker) + U.S.-based clients; no clearance. */
+export const ITBSTAR_US_BASED_DEV = `
+Web Developer
+IT-BSTAR
+Wexford, PA · Remote
+Part-time
+About the job
+We are looking for a U.S.-based Web/Mobile Developer to work closely with our software development team and support client projects.
+Requirements:
+Strong communication skills and the ability to work directly with U.S.-based clients
+Benefits:
+Fully remote and flexible working environment
+`.padEnd(600, ' ');
+
+/** LinkedIn chrome noise: filter label without actual clearance requirement. */
+export const CLEARANCE_UI_NOISE_JD = `
+Web Developer — Acme
+Remote
+Fully remote role. Build React apps.
+Security clearance
+Easy Apply
+`.padEnd(400, ' ');
+
+/** Cormac-shape: Must be a U.S. Citizen (work auth, not residency). */
+export const CORMAC_US_CITIZEN = `
+Federal Healthcare - Technical Lead
+Cormac Corporation
+Qualifications:
+Bachelor's degree in Computer Science, Software Engineering, Information Technology, or a related field.
+Must be a U.S. Citizen.
+Minimum of 7+ years of software development experience, with at least 2–3 years serving in a Technical Lead role.
+Experience with JavaScript, TypeScript, React, Node.js, AWS, Docker, PostgreSQL.
+`.padEnd(600, ' ');
+
 /** Quarterly remote travel outside operator radius. */
 export const DFW_QUARTERLY_REMOTE = `
 Sr. Full Stack Developer — Dallas, TX 75019 · Remote

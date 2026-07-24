@@ -10,7 +10,7 @@ import { getConfig, hasGeoIntent } from '../lib/storage';
 import type { PreflightMode, PreflightResult, PreflightVerdict } from '../types/domain';
 import {
   humanizePreflightReasons,
-  listingFingerprint,
+  listingIdentityFingerprint,
   pageTextSignature,
   preflightCacheKey,
 } from '../lib/preflight';
@@ -187,11 +187,11 @@ function currentListingContext(): {
   const pageText = extractPageTextForBoard(board);
   const textSig = pageTextSignature(pageText);
   const cacheKey = preflightCacheKey({ href, canonicalUrl });
-  const fingerprint = listingFingerprint({
+  // Identity only — ignore lazy JD text growth so scroll does not re-preflight.
+  const fingerprint = listingIdentityFingerprint({
     href,
     canonicalUrl,
     paneTitle: title,
-    pageText,
   });
   return { href, canonicalUrl, title, pageText, cacheKey, fingerprint, textSig };
 }
@@ -225,12 +225,12 @@ async function refreshModeFromConfig(): Promise<void> {
 function readCache(
   key: string,
   title: string,
-  textSig: string
+  _textSig: string
 ): PreflightResult | null {
   const entry = preflightCache.get(key);
   if (!entry) return null;
-  // Invalidate sticky canonical hits when the visible listing changed.
-  if (entry.title !== title || entry.textSig !== textSig) return null;
+  // Same listing key + title → reuse (ignore text growth from scroll/lazy load).
+  if (entry.title !== title) return null;
   return entry.result;
 }
 
@@ -441,7 +441,7 @@ syncLauncher();
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
-      characterData: true,
+      // Do not observe characterData — Indeed JD scroll/lazy text would re-fire preflight.
     });
   }
 }
